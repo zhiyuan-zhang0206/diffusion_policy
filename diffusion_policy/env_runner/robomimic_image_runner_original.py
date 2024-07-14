@@ -9,15 +9,16 @@ import h5py
 import math
 import dill
 import wandb.sdk.data_types.video as wv
-from PIL import Image
 from diffusion_policy.gym_util.async_vector_env import AsyncVectorEnv
 from diffusion_policy.gym_util.sync_vector_env import SyncVectorEnv
 from diffusion_policy.gym_util.multistep_wrapper import MultiStepWrapper
 from diffusion_policy.gym_util.video_recording_wrapper import VideoRecordingWrapper, VideoRecorder
+from diffusion_policy.model.common.rotation_transformer import RotationTransformer
+
+from diffusion_policy.policy.base_image_policy import BaseImagePolicy
 from diffusion_policy.common.pytorch_util import dict_apply
 from diffusion_policy.env_runner.base_image_runner import BaseImageRunner
 from diffusion_policy.env.robomimic.robomimic_image_wrapper import RobomimicImageWrapper
-
 import robomimic.utils.file_utils as FileUtils
 import robomimic.utils.env_utils as EnvUtils
 import robomimic.utils.obs_utils as ObsUtils
@@ -47,14 +48,14 @@ class RobomimicImageRunner(BaseImageRunner):
             output_dir,
             dataset_path,
             shape_meta:dict,
-            n_train=0,
+            n_train=10,
             n_train_vis=3,
             train_start_idx=0,
-            n_test=25,
+            n_test=22,
             n_test_vis=6,
             test_start_seed=10000,
             max_steps=400,
-            n_obs_steps=1,
+            n_obs_steps=2,
             n_action_steps=8,
             render_obs_key='agentview_image',
             fps=10,
@@ -81,6 +82,10 @@ class RobomimicImageRunner(BaseImageRunner):
         env_meta['env_kwargs']['use_object_obs'] = False
 
         rotation_transformer = None
+        if abs_action:
+            env_meta['env_kwargs']['controller_configs']['control_delta'] = False
+            rotation_transformer = RotationTransformer('axis_angle', 'rotation_6d')
+
         def env_fn():
             robomimic_env = create_env(
                 env_meta=env_meta, 
@@ -152,7 +157,36 @@ class RobomimicImageRunner(BaseImageRunner):
         env_seeds = list()
         env_prefixs = list()
         env_init_fn_dills = list()
-  
+
+        # train
+        with h5py.File(dataset_path, 'r') as f:
+            for i in range(n_train):
+                train_idx = train_start_idx + i
+                enable_render = i < n_train_vis
+                init_state = f[f'data/demo_{train_idx}/states'][0]
+
+                def init_fn(env, init_state=init_state, 
+                    enable_render=enable_render):
+                    # setup rendering
+                    # video_wrapper
+                    assert isinstance(env.env, VideoRecordingWrapper)
+                    env.env.video_recoder.stop()
+                    env.env.file_path = None
+                    if enable_render:
+                        filename = pathlib.Path(output_dir).joinpath(
+                            'media', wv.util.generate_id() + ".mp4")
+                        filename.parent.mkdir(parents=False, exist_ok=True)
+                        filename = str(filename)
+                        env.env.file_path = filename
+
+                    # switch to init_state reset
+                    assert isinstance(env.env.env, RobomimicImageWrapper)
+                    env.env.env.init_state = init_state
+
+                env_seeds.append(train_idx)
+                env_prefixs.append('train/')
+                env_init_fn_dills.append(dill.dumps(init_fn))
+        
         # test
         for i in range(n_test):
             seed = test_start_seed + i
@@ -184,6 +218,7 @@ class RobomimicImageRunner(BaseImageRunner):
         env = AsyncVectorEnv(env_fns, dummy_env_fn=dummy_env_fn)
         # env = SyncVectorEnv(env_fns)
 
+
         self.env_meta = env_meta
         self.env = env
         self.env_fns = env_fns
@@ -200,11 +235,7 @@ class RobomimicImageRunner(BaseImageRunner):
         self.abs_action = abs_action
         self.tqdm_interval_sec = tqdm_interval_sec
 
-        ############################################
-        self.image_keys = sorted([render_obs_key, 'robot0_eye_in_hand_image'])
-        self.low_dim_keys = sorted(['robot0_eef_pos', 'robot0_eef_quat', 'robot0_gripper_qpos'])
-
-    def run(self, policy, language_feature, img_feature_extract_fn, img_preprocess):
+    def run(self, policy: BaseImagePolicy):
         device = policy.device
         dtype = policy.dtype
         env = self.env
@@ -238,6 +269,7 @@ class RobomimicImageRunner(BaseImageRunner):
             # start rollout
             obs = env.reset()
             past_action = None
+            policy.reset()
 
             env_name = self.env_meta['env_name']
             pbar = tqdm.tqdm(total=self.max_steps, desc=f"Eval {env_name}Image {chunk_idx+1}/{n_chunks}", 
@@ -247,47 +279,40 @@ class RobomimicImageRunner(BaseImageRunner):
             while not done:
                 # create obs dict
                 np_obs_dict = dict(obs)
+                if self.past_action and (past_action is not None):
+                    # TODO: not tested
+                    np_obs_dict['past_action'] = past_action[
+                        :,-(self.n_obs_steps-1):].astype(np.float32)
                 
-                views = [np_obs_dict[k] for k in sorted(self.image_keys)]
-                low_dim_data = [np_obs_dict[k] for k in sorted(self.low_dim_keys)]
-                batch_size = n_envs
+                # device transfer
+                obs_dict = dict_apply(np_obs_dict, 
+                    lambda x: torch.from_numpy(x).to(
+                        device=device))
 
-                batch_image_tensors = []
-                for i in range(batch_size):
-                    view_0 = (np.squeeze(views[0][i]) * 255).astype(np.uint8).transpose(1,2,0)
-                    view_1 = (np.squeeze(views[1][i]) * 255).astype(np.uint8).transpose(1,2,0)
-                    processed_0 = img_preprocess(Image.fromarray(view_0))
-                    processed_1 = img_preprocess(Image.fromarray(view_1))
-                    batch_image_tensors.append(torch.stack([processed_0, processed_1], dim=0))
-                batch_image_tensors = torch.stack(batch_image_tensors, dim=0).view(batch_size * 2, 3, 224, 224).to(device=device, dtype=dtype)
-                image_features = img_feature_extract_fn(batch_image_tensors).view(batch_size, 2, -1)
-                low_dim_data = np.squeeze(np.concatenate(low_dim_data, axis=-1))
-                low_dim_data = torch.from_numpy(low_dim_data).to(device=device, dtype=dtype).unsqueeze(1)
-                language_feature = language_feature.expand(batch_size, 1, -1)
                 # run policy
                 with torch.no_grad():
-                    action = policy.predict_action(raw_language_features=language_feature, raw_image_features=image_features, raw_low_dim_data=low_dim_data).cpu().numpy()
+                    action_dict = policy.predict_action(obs_dict)
 
+                # device_transfer
+                np_action_dict = dict_apply(action_dict,
+                    lambda x: x.detach().to('cpu').numpy())
+
+                action = np_action_dict['action']
                 if not np.all(np.isfinite(action)):
                     print(action)
                     raise RuntimeError("Nan or Inf action")
-                pred_action_length = action.shape[1]
-
-                if self.n_action_steps > pred_action_length // 2:
-                        env_action = action[:, :self.n_action_steps, :]
-                else:
-                    # step env
-                    if past_action is None:
-                        env_action = action[:, :self.n_action_steps, :]
-                    else:
-                        env_action = (action[:, :self.n_action_steps, :] + past_action[:, self.n_action_steps: self.n_action_steps*2:, :]) / 2
+                
+                # step env
+                env_action = action
+                if self.abs_action:
+                    env_action = self.undo_transform_action(action)
 
                 obs, reward, done, info = env.step(env_action)
                 done = np.all(done)
                 past_action = action
 
                 # update pbar
-                pbar.update(env_action.shape[1])
+                pbar.update(action.shape[1])
             pbar.close()
 
             # collect data for this round
@@ -316,9 +341,9 @@ class RobomimicImageRunner(BaseImageRunner):
 
             # visualize sim
             video_path = all_video_paths[i]
-            # if video_path is not None:
-            #     sim_video = wandb.Video(video_path)
-            #     log_data[prefix+f'sim_video_{seed}'] = sim_video
+            if video_path is not None:
+                sim_video = wandb.Video(video_path)
+                log_data[prefix+f'sim_video_{seed}'] = sim_video
         
         # log aggregate metrics
         for prefix, value in max_rewards.items():

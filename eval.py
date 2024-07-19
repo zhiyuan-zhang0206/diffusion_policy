@@ -7,7 +7,7 @@ import sys
 # use line-buffering for both stdout and stderr
 sys.stdout = open(sys.stdout.fileno(), mode='w', buffering=1)
 sys.stderr = open(sys.stderr.fileno(), mode='w', buffering=1)
-
+import zzy_utils
 import os
 import pathlib
 import click
@@ -23,7 +23,7 @@ from diffusion_policy.workspace.base_workspace import BaseWorkspace
 @click.option('-o', '--output_dir', required=True)
 @click.option('-d', '--device', default='cuda:0')
 def main(checkpoint, output_dir, device):
-    if os.path.exists(output_dir):
+    if os.path.exists(output_dir) and not zzy_utils.check_environ_debug():
         click.confirm(f"Output path {output_dir} already exists! Overwrite?", abort=True)
     pathlib.Path(output_dir).mkdir(parents=True, exist_ok=True)
     
@@ -45,6 +45,13 @@ def main(checkpoint, output_dir, device):
     policy.eval()
     
     # run eval
+    if zzy_utils.check_environ_debug():
+        cfg.task.env_runner['n_test'] = 0
+        cfg.task.env_runner['n_envs'] = 1
+        cfg.task.env_runner['n_test_vis'] = 1
+        cfg.task.env_runner['n_train'] = 1
+        cfg.task.env_runner['n_train_vis'] = 1
+        cfg.task.env_runner['max_steps'] = 80
     env_runner = hydra.utils.instantiate(
         cfg.task.env_runner,
         output_dir=output_dir)

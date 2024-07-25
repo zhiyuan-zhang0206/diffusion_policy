@@ -68,7 +68,7 @@ class RobomimicImageRunner(BaseImageRunner):
         ):
         super().__init__(output_dir)
         if zzy_utils.check_environ_debug():
-            max_steps = 80
+            max_steps = 56
         if n_envs is None:
             n_envs = n_train + n_test
 
@@ -82,7 +82,7 @@ class RobomimicImageRunner(BaseImageRunner):
             dataset_path)
         # disable object state observation
         env_meta['env_kwargs']['use_object_obs'] = False
-
+        # env_meta['env_kwargs']['controller_configs']['control_delta'] = False
         rotation_transformer = None
         def env_fn():
             robomimic_env = create_env(
@@ -256,8 +256,9 @@ class RobomimicImageRunner(BaseImageRunner):
                 from pathlib import Path
                 import pickle
                 with Path(__file__).parent.joinpath('env_actions.pkl').open('rb') as f:
-                    self.env_actions : list = pickle.load(f)
-                env_actions_array = np.concatenate([arr[0] for arr in self.env_actions])
+                    self.env_actions : list = pickle.load(f)['qpos'].tolist()
+                
+                # env_actions_array = np.concatenate([arr[0] for arr in self.env_actions])['qpos']
                 # env_actions_array[:, 0] =  0.27
                 # env_actions_array[:, 2] =  1.0
                 # env_actions_array[:, 3:6] = np.array([0,  0, 0,])
@@ -265,9 +266,10 @@ class RobomimicImageRunner(BaseImageRunner):
                 # env_actions_array[50:75, 3:6] = np.array([0, 1.57, 0,])
                 # env_actions_array[75:100, 3:6] = np.array([0,  0,1.57,])
                 # env_actions_array[:, -1] = -1
-                for line in env_actions_array:
-                    print(' '.join([f'{val:.4f}' for val in line]))
-                self.env_actions = [env_actions_array[i*8:(i+1)*8][np.newaxis] for i in range(len(env_actions_array)//8)]
+                # for line in env_actions_array:
+                #     print(' '.join([f'{val:.4f}' for val in line]))
+                # self.env_actions = [env_actions_array[i*8:(i+1)*8][np.newaxis] for i in range(len(env_actions_array)//8)]
+
 
             while not done:
                 # create obs dict
@@ -308,10 +310,16 @@ class RobomimicImageRunner(BaseImageRunner):
                         env_action = (action[:, :self.n_action_steps, :] + past_action[:, self.n_action_steps: self.n_action_steps*2:, :]) / 2
 
                 if zzy_utils.check_environ_debug():
-                    # env_action = self.env_actions.pop(0)
+                    env_action = self.env_actions[:8]
+                    self.env_actions = self.env_actions[8:]
+                    env_action = np.array(env_action)[None, ...]
+                    # env_action = np.diff(env_action, axis=1)
                     # logger.info(env_action.shape)
-                    env_action[0, :, :] = 0.0
-                    env_action[0, :, -1] = -0.2
+                    # env_action[0, :, :] = 0.0
+                    # env_action[0, :, -1] = -1
+                    # env_action[0, :, 0] = 0.05
+                    # env_action[0, :, 1] = 0.05
+                    # env_action[0, :, 2] = 0.05
                     pass
                 obs, reward, done, info = env.step(env_action)
                 done = np.all(done)
@@ -326,7 +334,7 @@ class RobomimicImageRunner(BaseImageRunner):
             all_rewards[this_global_slice] = env.call('get_attr', 'reward')[this_local_slice]
         # clear out video buffer
         _ = env.reset()
-        
+        env.close()
         # log
         max_rewards = collections.defaultdict(list)
         log_data = dict()

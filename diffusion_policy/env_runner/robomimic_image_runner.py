@@ -289,20 +289,22 @@ class RobomimicImageRunner(BaseImageRunner):
                 leave=False, mininterval=self.tqdm_interval_sec)
             
             if zzy_utils.check_environ_debug():
+                pass
                 from pathlib import Path
                 import pickle
                 with Path(__file__).parent.joinpath('env_actions.pkl').open('rb') as f:
                     self.env_actions : list = pickle.load(f)
                 env_actions_array = np.concatenate([arr[0] for arr in self.env_actions])
-                # env_actions_array[:, 0] =  0.27
-                # env_actions_array[:, 2] =  1.0
-                # env_actions_array[:, 3:6] = np.array([0,  0, 0,])
-                # env_actions_array[25:50, 3:6] = np.array([1.57, 0,  0,])
-                # env_actions_array[50:75, 3:6] = np.array([0, 1.57, 0,])
-                # env_actions_array[75:100, 3:6] = np.array([0,  0,1.57,])
-                # env_actions_array[:, -1] = -1
-                for line in env_actions_array:
-                    print(' '.join([f'{val:.4f}' for val in line]))
+                zzy_utils.visualize_time_series_data(env_actions_array, 0, save_path='env_actions.png', block=False)
+                # # env_actions_array[:, 0] =  0.27
+                # # env_actions_array[:, 2] =  1.0
+                # # env_actions_array[:, 3:6] = np.array([0,  0, 0,])
+                # # env_actions_array[25:50, 3:6] = np.array([1.57, 0,  0,])
+                # # env_actions_array[50:75, 3:6] = np.array([0, 1.57, 0,])
+                # # env_actions_array[75:100, 3:6] = np.array([0,  0,1.57,])
+                # # env_actions_array[:, -1] = -1
+                # for line in env_actions_array:
+                #     print(' '.join([f'{val:.4f}' for val in line]))
                 self.env_actions = [env_actions_array[i*8:(i+1)*8][np.newaxis] for i in range(len(env_actions_array)//8)]
 
                 # for chunk in self.env_actions:
@@ -312,6 +314,7 @@ class RobomimicImageRunner(BaseImageRunner):
             done = False
             while not done:
                 if zzy_utils.check_environ_debug():
+                    pass
                     env_action = self.env_actions.pop(0)
                 # create obs dict
                 np_obs_dict = dict(obs)
@@ -339,9 +342,9 @@ class RobomimicImageRunner(BaseImageRunner):
                     raise RuntimeError("Nan or Inf action")
                 
                 # step env
-                env_action = action
-                if self.abs_action:
-                    env_action = self.undo_transform_action(action)
+                # env_action = action
+                # if self.abs_action:
+                #     env_action = self.undo_transform_action(action)
 
                 obs, reward, done, info = env.step(env_action)
                 done = np.all(done)
@@ -356,6 +359,7 @@ class RobomimicImageRunner(BaseImageRunner):
             all_rewards[this_global_slice] = env.call('get_attr', 'reward')[this_local_slice]
         # clear out video buffer
         _ = env.reset()
+        env.close()
         
         # log
         max_rewards = collections.defaultdict(list)

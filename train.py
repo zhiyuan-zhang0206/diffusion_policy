@@ -8,7 +8,7 @@ import sys
 # use line-buffering for both stdout and stderr
 sys.stdout = open(sys.stdout.fileno(), mode='w', buffering=1)
 sys.stderr = open(sys.stderr.fileno(), mode='w', buffering=1)
-
+import zzy_utils
 import hydra
 from omegaconf import OmegaConf
 import pathlib
@@ -27,6 +27,12 @@ def main(cfg: OmegaConf):
     # will use the same time.
     OmegaConf.resolve(cfg)
 
+    if zzy_utils.check_environ_debug():
+        cfg.task.env_runner.n_envs = 1
+        cfg.task.env_runner.n_train = 1
+        cfg.task.env_runner.n_test = 1
+        cfg.task.env_runner.n_test_vis = 1
+        cfg['dataloader']['shuffle'] = False
     cls = hydra.utils.get_class(cfg._target_)
     workspace: BaseWorkspace = cls(cfg)
     workspace.run()

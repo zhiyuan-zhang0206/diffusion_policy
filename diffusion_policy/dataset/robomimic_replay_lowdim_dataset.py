@@ -4,6 +4,8 @@ import numpy as np
 import h5py
 from tqdm import tqdm
 import copy
+from torch.utils.data import DataLoader
+import lightning.pytorch as L
 from diffusion_policy.common.pytorch_util import dict_apply
 from diffusion_policy.dataset.base_dataset import BaseLowdimDataset, LinearNormalizer
 from diffusion_policy.model.common.normalizer import LinearNormalizer, SingleFieldLinearNormalizer
@@ -166,3 +168,24 @@ def _data_to_obs(raw_obs, raw_actions, obs_keys, abs_action, rotation_transforme
         'action': raw_actions
     }
     return data
+
+class RobomimicLowdimDatamodule(L.LightningDataModule):
+    def __init__(self, batch_size, num_workers, dataset: RobomimicReplayLowdimDataset):
+        super().__init__()
+        self.batch_size = batch_size
+        self.num_workers = num_workers
+        self.dataset = dataset
+
+    def prepare_data(self):
+        self.train_dataset = self.dataset
+        self.val_dataset = self.train_dataset.get_validation_dataset()
+        self.normalizer = self.train_dataset.get_normalizer()
+
+    def setup(self, stage: str):
+        pass
+
+    def train_dataloader(self):
+        return DataLoader(self.train_dataset, batch_size=self.batch_size, num_workers=self.num_workers)
+
+    def val_dataloader(self):
+        return DataLoader(self.val_dataset, batch_size=self.batch_size, num_workers=self.num_workers)

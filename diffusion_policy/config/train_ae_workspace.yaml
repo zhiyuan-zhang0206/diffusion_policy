@@ -1,6 +1,6 @@
 defaults:
   - _self_
-  - task: lift_image_abs
+  - task: lift_lowdim_abs # lift_image_abs
 
 name: train_ae
 _target_: diffusion_policy.workspace.train_ae_workspace.TrainAEWorkspace
@@ -9,15 +9,21 @@ task_name: ${task.name}
 shape_meta: ${task.shape_meta}
 exp_name: "default"
 
+test_ae_only: True
+
 horizon: 16
-# n_action_steps: 8
-# n_latency_steps: 0
-# dataset_obs_steps: ${n_obs_steps}
-# past_action_visible: False
-# keypoint_visible_rate: 1.0
-# obs_as_global_cond: True
+n_obs_steps: 1
+n_latency_steps: 0
+dataset_obs_steps: 1
+past_action_visible: False
+n_action_steps: 8
 use_image_input: False
 use_language_input: False
+
+seed: 3407
+
+training:
+  use_ema: False
 
 policy:
   _target_: diffusion_policy.policy.ae_policy.AEPolicy
@@ -30,28 +36,17 @@ policy:
   n_heads: 8
   horizon: ${horizon}
   dropout: 0.1
+  lr: 3e-4
+  weight_decay: 0.0
+  warmup_steps: 1000
   # language_feature_dim: 
   # low_dim_feature_dim:
   # with_obs: True
   # with_language: True
   # ckpt_path: 
+  kl_weight: 0.001
   shape_meta: ${shape_meta}
-  # n_action_steps: ${eval:'${n_action_steps}+${n_latency_steps}'}
-  # n_obs_steps: ${n_obs_steps}
-  # num_inference_steps: 100
-  # obs_as_global_cond: ${obs_as_global_cond}
-  # crop_shape: [76, 76]
-  # crop_shape: null
-  # diffusion_step_embed_dim: 128
-  # down_dims: [512, 1024, 2048]
-  # kernel_size: 5
-  # n_groups: 8
-  # cond_predict_scale: True
-  # obs_encoder_group_norm: True
-  # eval_fixed_crop: True
 
-  # scheduler.step params
-  # predict_epsilon: True
 
 # ema:
 #   _target_: diffusion_policy.model.diffusion.ema_model.EMAModel
@@ -60,70 +55,62 @@ policy:
 #   power: 0.75
 #   min_value: 0.0
 #   max_value: 0.9999
-
-dataloader:
-  batch_size: 64
+datamodule:
+  _target_: diffusion_policy.dataset.robomimic_replay_lowdim_dataset.RobomimicLowdimDatamodule
+  # _target_: diffusion_policy.dataset.robomimic_replay_image_dataset.RobomimicImageDatamodule
+  batch_size: 8192
   num_workers: 8
-  shuffle: True
-  pin_memory: True
-  persistent_workers: False
+  dataset: ${task.dataset}
 
-val_dataloader:
-  batch_size: 64
-  num_workers: 8
-  shuffle: False
-  pin_memory: True
-  persistent_workers: False
+trainer:
+  _target_: lightning.pytorch.trainer.Trainer
+  # devices: [0, 1, 2, 3]
+  max_epochs: 10000
+  # pretrain_max_epochs: 10
+  check_val_every_n_epoch: 100
+  log_every_n_steps: 10
+  logger:
+    _target_: lightning.pytorch.loggers.wandb.WandbLogger 
+    project: 
+    name: 
+  num_sanity_val_steps: 2
+  # strategy: ddp
+  default_root_dir: ${oc.env:DATA_ROOT}/RoLD_logs/
+  # overfit_batches: 500
+  fast_dev_run: True
+  profiler: simple
+  # profiler: 
+  #   _target_: lightning.pytorch.profilers.AdvancedProfiler
+  #   dirpath: .
+  #   filename: perf_logs
+  gradient_clip_val: 0.5
+  callbacks:
+    - _target_: lightning.pytorch.callbacks.ModelCheckpoint
+      save_top_k: 1
+      save_last: True
+      save_weights_only: False
+      monitor: val_total_loss
+      mode: min
+    - _target_: lightning.pytorch.callbacks.TQDMProgressBar
+      # refresh_rate: 100
 
-optimizer:
-  _target_: torch.optim.AdamW
-  lr: 1.0e-4
-  betas: [0.95, 0.999]
-  eps: 1.0e-8
-  weight_decay: 1.0e-6
+# logging:
+#   project: diffusion_policy_debug
+#   resume: True
+#   mode: online
+#   name: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
+#   tags: ["${name}", "${task_name}", "${exp_name}"]
+#   id: null
+#   group: null
 
-training:
-  device: "cuda:0"
-  seed: 42
-  debug: False
-  resume: False
-  # optimization
-  lr_scheduler: cosine
-  lr_warmup_steps: 500
-  num_epochs: 3050
-  gradient_accumulate_every: 1
-  # EMA destroys performance when used with BatchNorm
-  # replace BatchNorm with GroupNorm.
-  use_ema: True
-  # training loop control
-  # in epochs
-  rollout_every: 50
-  checkpoint_every: 50
-  val_every: 1
-  sample_every: 5
-  # steps per epoch
-  max_train_steps: null
-  max_val_steps: null
-  # misc
-  tqdm_interval_sec: 1.0
-
-logging:
-  project: diffusion_policy_debug
-  resume: True
-  mode: online
-  name: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
-  tags: ["${name}", "${task_name}", "${exp_name}"]
-  id: null
-  group: null
-
-checkpoint:
-  topk:
-    monitor_key: test_mean_score
-    mode: max
-    k: 5
-    format_str: 'epoch={epoch:04d}-test_mean_score={test_mean_score:.3f}.ckpt'
-  save_last_ckpt: True
-  save_last_snapshot: False
+# checkpoint:
+#   topk:
+#     monitor_key: test_mean_score
+#     mode: max
+#     k: 5
+#     format_str: 'epoch={epoch:04d}-test_mean_score={test_mean_score:.3f}.ckpt'
+#   save_last_ckpt: True
+#   save_last_snapshot: False
 
 multi_run:
   run_dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}

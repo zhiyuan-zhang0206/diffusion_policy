@@ -141,3 +141,4 @@ dmypy.json
 vis.mp4
 MUJOCO_LOG.TXT
 diffusion_policy/env_runner/env_actions.pkl
+lightning_logs/

@@ -15,8 +15,9 @@ from diffusion_policy.common.robomimic_config_util import get_robomimic_config
 from robomimic.algo import algo_factory
 from robomimic.algo.algo import PolicyAlgo
 import robomimic.utils.obs_utils as ObsUtils
-import robomimic.models.base_nets as rmbn
+
 import diffusion_policy.model.vision.crop_randomizer as dmvc
+from diffusion_policy.model.diffusion.cvae_rold import DownsampleCVAE
 from diffusion_policy.common.pytorch_util import dict_apply, replace_submodules
 from loguru import logger
 
@@ -30,6 +31,11 @@ class AEPolicy(BaseImagePolicy):
             n_decoder_layers: int,
             n_heads: int,
             dropout: float,
+            kl_weight: float=0.001,
+            sample_posterior: bool=False,
+            lr: float=3e-4,
+            weight_decay: float=0.0,
+            warmup_steps: int=1000,
             # n_obs_steps,
             # crop_shape=(76, 76),
             ):
@@ -39,7 +45,21 @@ class AEPolicy(BaseImagePolicy):
         action_shape = shape_meta['action']['shape']
         assert len(action_shape) == 1
         action_dim = action_shape[0]
-        self.model = 
+        self.pl_model = DownsampleCVAE(
+            action_dim=action_dim,
+            hidden_size=hidden_size,
+            latent_size=latent_size,
+            horizon=horizon,
+            n_encoder_layers=n_encoder_layers,
+            n_decoder_layers=n_decoder_layers,
+            n_heads=n_heads,
+            dropout=dropout,
+            kl_weight=kl_weight,
+            sample_posterior=sample_posterior,
+            lr=lr,
+            weight_decay=weight_decay,
+            warmup_steps=warmup_steps,
+        )
         # obs_shape_meta = shape_meta['obs']
         # obs_config = {
         #     'low_dim': [],
@@ -169,53 +189,17 @@ class AEPolicy(BaseImagePolicy):
         # print("Diffusion params: %e" % sum(p.numel() for p in self.model.parameters()))
         # print("Vision params: %e" % sum(p.numel() for p in self.obs_encoder.parameters()))
     
-    # ========= inference  ============
-    def conditional_sample(self, 
-            condition_data, condition_mask,
-            local_cond=None, global_cond=None,
-            generator=None,
-            # keyword arguments to scheduler.step
-            **kwargs
-            ):
-        model = self.model
-        scheduler = self.noise_scheduler
-
-        trajectory = torch.randn(
-            size=condition_data.shape, 
-            dtype=condition_data.dtype,
-            device=condition_data.device,
-            generator=generator)
-    
-        # set step values
-        scheduler.set_timesteps(self.num_inference_steps)
-
-        for t in scheduler.timesteps:
-            # 1. apply conditioning
-            trajectory[condition_mask] = condition_data[condition_mask]
-
-            # 2. predict model output
-            model_output = model(trajectory, t, 
-                local_cond=local_cond, global_cond=global_cond)
-
-            # 3. compute previous image: x_t -> x_t-1
-            trajectory = scheduler.step(
-                model_output, t, trajectory, 
-                generator=generator,
-                **kwargs
-                ).prev_sample
-        
-        # finally make sure conditioning is enforced
-        trajectory[condition_mask] = condition_data[condition_mask]        
-
-        return trajectory
-
 
     def predict_action(self, obs_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         """
         obs_dict: must include "obs" key
         result: must include "action" key
         """
-        logger.debug(f"predict action called")
+        # logger.debug(f"predict action called")
+        # normalized_obs = self.normalizer.normalize(obs_dict)
+        _, pred_action = self.pl_model(obs_dict)
+        # pred_action = self.normalizer['action'].unnormalize(pred_action)
+        return pred_action
         # assert 'past_action' not in obs_dict # not implemented yet
         # # normalize input
         # nobs = self.normalizer.normalize(obs_dict)

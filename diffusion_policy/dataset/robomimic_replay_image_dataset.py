@@ -13,7 +13,10 @@ from filelock import FileLock
 from threadpoolctl import threadpool_limits
 import concurrent.futures
 import multiprocessing
+from torch.utils.data import DataLoader
+import lightning as L
 from omegaconf import OmegaConf
+import hydra
 from diffusion_policy.common.pytorch_util import dict_apply
 from diffusion_policy.dataset.base_dataset import BaseImageDataset, LinearNormalizer
 from diffusion_policy.model.common.normalizer import LinearNormalizer, SingleFieldLinearNormalizer
@@ -371,3 +374,24 @@ def normalizer_from_stat(stat):
         offset=offset,
         input_stats_dict=stat
     )
+
+class RobomimicImageDatamodule(L.LightningDataModule):
+    def __init__(self, batch_size, num_workers, dataset: RobomimicReplayImageDataset):
+        super().__init__()
+        self.batch_size = batch_size
+        self.num_workers = num_workers
+        self.dataset = dataset
+
+    def prepare_data(self):
+        self.train_dataset = self.dataset
+        self.val_dataset = self.train_dataset.get_validation_dataset()
+        self.normalizer = self.train_dataset.get_normalizer()
+
+    def setup(self, stage: str):
+        pass
+
+    def train_dataloader(self):
+        return DataLoader(self.train_dataset, batch_size=self.batch_size, num_workers=self.num_workers)
+
+    def val_dataloader(self):
+        return DataLoader(self.val_dataset, batch_size=self.batch_size, num_workers=self.num_workers)

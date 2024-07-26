@@ -32,7 +32,7 @@ def main(cfg: OmegaConf):
         cfg.task.env_runner.n_train = 1
         cfg.task.env_runner.n_test = 1
         cfg.task.env_runner.n_test_vis = 1
-        cfg['dataloader']['shuffle'] = False
+        # cfg['dataloader']['shuffle'] = False
     cls = hydra.utils.get_class(cfg._target_)
     workspace: BaseWorkspace = cls(cfg)
     workspace.run()

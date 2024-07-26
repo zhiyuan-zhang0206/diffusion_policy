@@ -22,8 +22,7 @@ from diffusion_policy.env.robomimic.robomimic_image_wrapper import RobomimicImag
 import robomimic.utils.file_utils as FileUtils
 import robomimic.utils.env_utils as EnvUtils
 import robomimic.utils.obs_utils as ObsUtils
-import zzy_utils
-from loguru import logger
+
 
 def create_env(env_meta, shape_meta, enable_render=True):
     modality_mapping = collections.defaultdict(list)
@@ -40,24 +39,48 @@ def create_env(env_meta, shape_meta, enable_render=True):
     return env
 
 
-class RobomimicImageRunner(BaseImageRunner):
+class RobomimicImageRunnerAE(BaseImageRunner):
     """
     Robomimic envs already enforces number of steps.
+    This is for testing autoencoders only.
     """
 
     def __init__(self, 
             output_dir,
             dataset_path,
-            shape_meta:dict,
+            shape_meta: dict = {
+                'obs': {
+                    'agentview_image': {
+                        'shape': [3, 84, 84],
+                        'type': 'rgb'
+                    },
+                    'robot0_eef_pos': {
+                        'shape': [3]
+                        # type default: low_dim
+                    },
+                    'robot0_eef_quat': {
+                        'shape': [4]
+                    },
+                    'robot0_gripper_qpos': {
+                        'shape': [2]
+                    }
+                },
+                'action': {
+                    'shape': [10]
+                }
+            },
+            obs_keys:list=[],
             n_train=10,
             n_train_vis=3,
             train_start_idx=0,
             n_test=22,
             n_test_vis=6,
-            test_start_seed=10000,
+            test_start_seed=196,
             max_steps=400,
             n_obs_steps=2,
             n_action_steps=8,
+            n_latency_steps=2,
+            render_hw=[128,128],
             render_obs_key='agentview_image',
             fps=10,
             crf=22,
@@ -174,12 +197,8 @@ class RobomimicImageRunner(BaseImageRunner):
                     env.env.video_recoder.stop()
                     env.env.file_path = None
                     if enable_render:
-                        if zzy_utils.check_environ_debug():
-                            filename = pathlib.Path(output_dir).joinpath(
-                                'media', zzy_utils.get_current_run_timestamp() + ".mp4")
-                        else:
-                            filename = pathlib.Path(output_dir).joinpath(
-                                'media', wv.util.generate_id() + ".mp4")
+                        filename = pathlib.Path(output_dir).joinpath(
+                            'media', wv.util.generate_id() + ".mp4")
                         filename.parent.mkdir(parents=False, exist_ok=True)
                         filename = str(filename)
                         env.env.file_path = filename
@@ -191,15 +210,7 @@ class RobomimicImageRunner(BaseImageRunner):
                 env_seeds.append(train_idx)
                 env_prefixs.append('train/')
                 env_init_fn_dills.append(dill.dumps(init_fn))
-            
-            # if zzy_utils.check_environ_debug():
-            #     self.dataset_path = dataset_path
-            #     self.data_states = [f[f'data/demo_{i}/states'][()] for i in range(n_train)]
-        if zzy_utils.check_environ_debug():
-            d = {'_target_': 'diffusion_policy.dataset.robomimic_replay_image_dataset.RobomimicReplayImageDataset', 'shape_meta': {'obs': {'agentview_image': {'shape': [3, 84, 84], 'type': 'rgb'}, 'robot0_eye_in_hand_image': {'shape': [3, 84, 84], 'type': 'rgb'}, 'robot0_eef_pos': {'shape': [3]}, 'robot0_eef_quat': {'shape': [4]}, 'robot0_gripper_qpos': {'shape': [2]}}, 'action': {'shape': [7]}}, 'dataset_path': 'data/robomimic/datasets/lift/ph/image.hdf5', 'horizon': 10, 'pad_before': 0, 'pad_after': 0, 'n_obs_steps': 10, 'abs_action': False, 'rotation_rep': 'rotation_6d', 'use_legacy_normalizer': False, 'use_cache': True, 'seed': 42, 'val_ratio': 0.02}
-            import hydra
-            self.dataset = hydra.utils.instantiate(d)
-
+        
         # test
         for i in range(n_test):
             seed = test_start_seed + i
@@ -248,6 +259,9 @@ class RobomimicImageRunner(BaseImageRunner):
         self.abs_action = abs_action
         self.tqdm_interval_sec = tqdm_interval_sec
 
+    def load_replay_buffer(self, workspace):
+        self.replay_buffer = workspace.datamodule.dataset.replay_buffer
+
     def run(self, policy: BaseImagePolicy):
         device = policy.device
         dtype = policy.dtype
@@ -287,38 +301,24 @@ class RobomimicImageRunner(BaseImageRunner):
             env_name = self.env_meta['env_name']
             pbar = tqdm.tqdm(total=self.max_steps, desc=f"Eval {env_name}Image {chunk_idx+1}/{n_chunks}", 
                 leave=False, mininterval=self.tqdm_interval_sec)
-            
-            if zzy_utils.check_environ_debug():
-                pass
-                from pathlib import Path
-                import pickle
-                with Path(__file__).parent.joinpath('env_actions.pkl').open('rb') as f:
-                    self.env_actions : list = pickle.load(f)['abs']
-                env_actions_array = self.env_actions
-                # zzy_utils.visualize_time_series_data(env_actions_array, 0, save_path='env_actions.png', block=False)
-                # # env_actions_array[:, 0] =  0.27
-                # # env_actions_array[:, 2] =  1.0
-                # # env_actions_array[:, 3:6] = np.array([0,  0, 0,])
-                # # env_actions_array[25:50, 3:6] = np.array([1.57, 0,  0,])
-                # # env_actions_array[50:75, 3:6] = np.array([0, 1.57, 0,])
-                # # env_actions_array[75:100, 3:6] = np.array([0,  0,1.57,])
-                # # env_actions_array[:, -1] = -1
-                # for line in env_actions_array:
-                #     print(' '.join([f'{val:.4f}' for val in line]))
-                self.env_actions = [env_actions_array[i*8:(i+1)*8][np.newaxis] for i in range(len(env_actions_array)//8)]
+            from pathlib import Path
+            import pickle
+            with Path(__file__).parent.joinpath('env_actions.pkl').open('rb') as f:
+                self.env_actions : list = pickle.load(f)['abs']
+            # env_actions_array = np.concatenate([arr for arr in self.env_actions])
+            env_actions_array = self.env_actions
+            self.env_actions = [env_actions_array[i*8:(i+1)*8][np.newaxis] for i in range(len(env_actions_array)//8)]
 
-                # for chunk in self.env_actions:
-                #     for line in chunk[0]:
-                #         l = np.round(line, 4).tolist()
-                #         print(' '.join([f'{val:.4f}' for val in l]))
             done = False
+            index = -1
             while not done:
+                index += 1
                 # create obs dict
                 np_obs_dict = dict(obs)
-                if self.past_action and (past_action is not None):
-                    # TODO: not tested
-                    np_obs_dict['past_action'] = past_action[
-                        :,-(self.n_obs_steps-1):].astype(np.float32)
+                # if self.past_action and (past_action is not None):
+                #     # TODO: not tested
+                #     np_obs_dict['past_action'] = past_action[
+                #         :,-(self.n_obs_steps-1):].astype(np.float32)
                 
                 # device transfer
                 obs_dict = dict_apply(np_obs_dict, 
@@ -326,32 +326,30 @@ class RobomimicImageRunner(BaseImageRunner):
                         device=device))
 
                 # run policy
-                with torch.no_grad():
-                    action_dict = policy.predict_action(obs_dict)
+                # with torch.no_grad():
+                    # action_dict = policy.predict_action(obs_dict)
 
                 # device_transfer
-                np_action_dict = dict_apply(action_dict,
-                    lambda x: x.detach().to('cpu').numpy())
-
-                action = np_action_dict['action']
-                if not np.all(np.isfinite(action)):
-                    print(action)
-                    raise RuntimeError("Nan or Inf action")
+                # np_action_dict = dict_apply(action_dict,
+                    # lambda x: x.detach().to('cpu').numpy())
+                # action = self.replay_buffer['action'][index]
+                # action = np_action_dict['action']
+                # if not np.all(np.isfinite(action)):
+                #     print(action)
+                #     raise RuntimeError("Nan or Inf action")
                 
                 # step env
                 # env_action = action
-                if self.abs_action:
-                    env_action = self.undo_transform_action(action)
+                # if self.abs_action:
+                    # env_action = self.undo_transform_action(action)
 
-                if zzy_utils.check_environ_debug():
-                    pass
-                    env_action = self.env_actions.pop(0)
+                env_action = self.env_actions[index]
                 obs, reward, done, info = env.step(env_action)
                 done = np.all(done)
-                past_action = action
+                # past_action = action
 
                 # update pbar
-                pbar.update(action.shape[1])
+                # pbar.update(action.shape[1])
             pbar.close()
 
             # collect data for this round
@@ -360,7 +358,6 @@ class RobomimicImageRunner(BaseImageRunner):
         # clear out video buffer
         _ = env.reset()
         env.close()
-        
         # log
         max_rewards = collections.defaultdict(list)
         log_data = dict()

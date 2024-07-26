@@ -55,6 +55,8 @@ def main(checkpoint, output_dir, device):
     env_runner = hydra.utils.instantiate(
         cfg.task.env_runner,
         output_dir=output_dir)
+    if hasattr(cfg.task.env_runner, 'test_ae_only') and cfg.task.env_runner.test_ae_only:
+        env_runner.load_replay_buffer(workspace)
     runner_log = env_runner.run(policy)
     
     # dump log to json

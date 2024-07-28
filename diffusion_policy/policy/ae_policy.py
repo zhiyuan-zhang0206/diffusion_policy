@@ -197,9 +197,11 @@ class AEPolicy(BaseImagePolicy):
         """
         # logger.debug(f"predict action called")
         # normalized_obs = self.normalizer.normalize(obs_dict)
-        _, pred_action = self.pl_model(obs_dict)
+        self.pl_model.eval()
+        loss_dict, pred_action = self.pl_model(obs_dict)
         # pred_action = self.normalizer['action'].unnormalize(pred_action)
-        return pred_action
+
+        return {'action': pred_action, 'loss_dict': loss_dict}
         # assert 'past_action' not in obs_dict # not implemented yet
         # # normalize input
         # nobs = self.normalizer.normalize(obs_dict)

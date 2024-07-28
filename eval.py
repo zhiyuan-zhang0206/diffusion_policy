@@ -37,7 +37,7 @@ def main(checkpoint, output_dir, device):
     
     # get policy from workspace
     policy = workspace.model
-    if cfg.training.use_ema:
+    if hasattr(cfg, 'training') and hasattr(cfg.training, 'use_ema') and cfg.training.use_ema:
         policy = workspace.ema_model
     
     device = torch.device(device)
@@ -51,11 +51,11 @@ def main(checkpoint, output_dir, device):
         cfg.task.env_runner['n_test_vis'] = 1
         cfg.task.env_runner['n_train'] = 1
         cfg.task.env_runner['n_train_vis'] = 1
-        cfg.task.env_runner['max_steps'] = 80
+        cfg.task.env_runner['max_steps'] = 59
     env_runner = hydra.utils.instantiate(
         cfg.task.env_runner,
         output_dir=output_dir)
-    if hasattr(cfg.task.env_runner, 'test_ae_only') and cfg.task.env_runner.test_ae_only:
+    if hasattr(cfg, 'test_ae_only') and cfg.test_ae_only:
         env_runner.load_replay_buffer(workspace)
     runner_log = env_runner.run(policy)
     

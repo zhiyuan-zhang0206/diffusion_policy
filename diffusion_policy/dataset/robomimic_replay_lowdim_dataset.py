@@ -189,3 +189,6 @@ class RobomimicLowdimDatamodule(L.LightningDataModule):
 
     def val_dataloader(self):
         return DataLoader(self.val_dataset, batch_size=self.batch_size, num_workers=self.num_workers)
+
+    def predict_dataloader(self):
+        return DataLoader(self.dataset, batch_size=self.batch_size, num_workers=self.num_workers)

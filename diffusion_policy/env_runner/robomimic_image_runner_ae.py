@@ -14,7 +14,8 @@ from diffusion_policy.gym_util.sync_vector_env import SyncVectorEnv
 from diffusion_policy.gym_util.multistep_wrapper import MultiStepWrapper
 from diffusion_policy.gym_util.video_recording_wrapper import VideoRecordingWrapper, VideoRecorder
 from diffusion_policy.model.common.rotation_transformer import RotationTransformer
-
+from diffusion_policy.common.replay_buffer import ReplayBuffer
+from diffusion_policy.dataset.robomimic_replay_lowdim_dataset import RobomimicLowdimDatamodule
 from diffusion_policy.policy.base_image_policy import BaseImagePolicy
 from diffusion_policy.common.pytorch_util import dict_apply
 from diffusion_policy.env_runner.base_image_runner import BaseImageRunner
@@ -260,18 +261,28 @@ class RobomimicImageRunnerAE(BaseImageRunner):
         self.tqdm_interval_sec = tqdm_interval_sec
 
     def load_replay_buffer(self, workspace):
-        self.replay_buffer = workspace.datamodule.dataset.replay_buffer
+        self.replay_buffer: ReplayBuffer = workspace.datamodule.dataset.replay_buffer
+        self.datamodule: RobomimicLowdimDatamodule = workspace.datamodule
 
     def run(self, policy: BaseImagePolicy):
         device = policy.device
         dtype = policy.dtype
         env = self.env
-        
+        self.horizon = policy.pl_model.horizon
         # plan for rollout
         n_envs = len(self.env_fns)
         n_inits = len(self.env_init_fn_dills)
         n_chunks = math.ceil(n_inits / n_envs)
 
+        # dataloader = self.datamodule.predict_dataloader()
+        policy.pl_model.eval()
+        # model = DownsampleCVAE.load_from_checkpoint('/home/zzy/robot/robot_zzy/diffusion_policy/lightning_logs/r8ik38j3/checkpoints/last.ckpt')
+        # for batch in dataloader:
+        #     batch = {k: v.to(device) for k, v in batch.items()}
+        #     loss_dict, pred_action = policy.pl_model(batch)
+        #     print(loss_dict)
+        #     break
+        # return
         # allocate data
         all_video_paths = [None] * n_inits
         all_rewards = [None] * n_inits
@@ -301,13 +312,16 @@ class RobomimicImageRunnerAE(BaseImageRunner):
             env_name = self.env_meta['env_name']
             pbar = tqdm.tqdm(total=self.max_steps, desc=f"Eval {env_name}Image {chunk_idx+1}/{n_chunks}", 
                 leave=False, mininterval=self.tqdm_interval_sec)
-            from pathlib import Path
-            import pickle
-            with Path(__file__).parent.joinpath('env_actions.pkl').open('rb') as f:
-                self.env_actions : list = pickle.load(f)['abs']
+            # from pathlib import Path
+            # import pickle
+            # with Path(__file__).parent.joinpath('env_actions.pkl').open('rb') as f:
+            #     self.env_actions : list = pickle.load(f)['abs']
+            self.env_actions = self.replay_buffer['action'][:self.replay_buffer.episode_ends[0]]
+            tail = [self.env_actions[-1]] * (self.horizon)
+            self.env_actions = np.concatenate([self.env_actions, tail])
             # env_actions_array = np.concatenate([arr for arr in self.env_actions])
             env_actions_array = self.env_actions
-            self.env_actions = [env_actions_array[i*8:(i+1)*8][np.newaxis] for i in range(len(env_actions_array)//8)]
+            self.env_actions = [env_actions_array[i:i+self.horizon][np.newaxis] for i in range(len(env_actions_array)//self.n_action_steps)]
 
             done = False
             index = -1
@@ -321,35 +335,36 @@ class RobomimicImageRunnerAE(BaseImageRunner):
                 #         :,-(self.n_obs_steps-1):].astype(np.float32)
                 
                 # device transfer
+                data_action = self.env_actions[index]
+                np_obs_dict['action'] = data_action
                 obs_dict = dict_apply(np_obs_dict, 
                     lambda x: torch.from_numpy(x).to(
                         device=device))
 
                 # run policy
-                # with torch.no_grad():
-                    # action_dict = policy.predict_action(obs_dict)
+                with torch.no_grad():
+                    action_dict = policy.predict_action(obs_dict)
 
                 # device_transfer
-                # np_action_dict = dict_apply(action_dict,
-                    # lambda x: x.detach().to('cpu').numpy())
-                # action = self.replay_buffer['action'][index]
-                # action = np_action_dict['action']
-                # if not np.all(np.isfinite(action)):
-                #     print(action)
-                #     raise RuntimeError("Nan or Inf action")
+                np_action_dict = dict_apply(action_dict,
+                    lambda x: x.detach().to('cpu').numpy())
+                action = np_action_dict['action'][:, :self.n_action_steps, :]
+                print(np_action_dict['loss_dict']['rec_loss'])
+                if not np.all(np.isfinite(action)):
+                    print(action)
+                    raise RuntimeError("Nan or Inf action")
                 
                 # step env
                 # env_action = action
-                # if self.abs_action:
-                    # env_action = self.undo_transform_action(action)
+                if self.abs_action:
+                    env_action = self.undo_transform_action(action)
 
-                env_action = self.env_actions[index]
                 obs, reward, done, info = env.step(env_action)
                 done = np.all(done)
                 # past_action = action
 
                 # update pbar
-                # pbar.update(action.shape[1])
+                pbar.update(action.shape[1])
             pbar.close()
 
             # collect data for this round

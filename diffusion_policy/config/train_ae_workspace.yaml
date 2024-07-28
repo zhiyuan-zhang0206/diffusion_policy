@@ -65,20 +65,21 @@ datamodule:
 trainer:
   _target_: lightning.pytorch.trainer.Trainer
   # devices: [0, 1, 2, 3]
-  max_epochs: 10000
+  max_epochs: 200
   # pretrain_max_epochs: 10
   check_val_every_n_epoch: 100
   log_every_n_steps: 10
   logger:
     _target_: lightning.pytorch.loggers.wandb.WandbLogger 
-    project: 
-    name: 
+    project: latent_diffusion_policy_ae
+    # name: 
+    save_dir: ${oc.env:DATA_ROOT}/latent_dp_logs/
   num_sanity_val_steps: 2
   # strategy: ddp
-  default_root_dir: ${oc.env:DATA_ROOT}/RoLD_logs/
+  default_root_dir: ${oc.env:DATA_ROOT}/latent_dp_logs/
   # overfit_batches: 500
-  fast_dev_run: True
-  profiler: simple
+  # fast_dev_run: True
+  # profiler: simple
   # profiler: 
   #   _target_: lightning.pytorch.profilers.AdvancedProfiler
   #   dirpath: .

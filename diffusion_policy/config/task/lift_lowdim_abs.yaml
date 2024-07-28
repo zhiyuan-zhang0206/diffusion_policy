@@ -29,7 +29,7 @@ obs_keys: &obs_keys [
         ]
 task_name: &task_name lift
 dataset_type: &dataset_type ph
-dataset_path: &dataset_path data/robomimic/datasets/${task.task_name}/${task.dataset_type}/low_dim_abs.hdf5
+dataset_path: &dataset_path ${oc.env:DATA_ROOT}/data/robomimic/datasets/${task.task_name}/${task.dataset_type}/low_dim_abs.hdf5
 abs_action: &abs_action True
 
 env_runner:
@@ -53,7 +53,7 @@ env_runner:
   crf: 22
   past_action: ${past_action_visible}
   abs_action: *abs_action
-  tqdm_interval_sec: 1.0
+  tqdm_interval_sec: 0.1
   n_envs: 28
 
 dataset:

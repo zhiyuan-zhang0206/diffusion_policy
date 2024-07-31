@@ -26,10 +26,57 @@ if [ "$is_slurm" = "true" ]; then
     srun python train.py \
         --config-dir=. \
         --config-name=train_ae_workspace.yaml \
-        "hydra.run.dir='${DATA_ROOT}/outputs/\${now:%Y.%m.%d}/\${now:%H.%M.%S}_\${name}_\${task_name}'"
+        "hydra.run.dir='${DATA_ROOT}/outputs/\${now:%Y.%m.%d}/\${now:%H.%M.%S}_\${name}_\${task_name}'" \
+        policy.lr=3e-4
+    srun python train.py \
+        --config-dir=. \
+        --config-name=train_ae_workspace.yaml \
+        "hydra.run.dir='${DATA_ROOT}/outputs/\${now:%Y.%m.%d}/\${now:%H.%M.%S}_\${name}_\${task_name}'" \
+        policy.lr=1e-4
+    srun python train.py \
+        --config-dir=. \
+        --config-name=train_ae_workspace.yaml \
+        "hydra.run.dir='${DATA_ROOT}/outputs/\${now:%Y.%m.%d}/\${now:%H.%M.%S}_\${name}_\${task_name}'" \
+        policy.lr=5e-5
+    srun python train.py \
+        --config-dir=. \
+        --config-name=train_ae_workspace.yaml \
+        "hydra.run.dir='${DATA_ROOT}/outputs/\${now:%Y.%m.%d}/\${now:%H.%M.%S}_\${name}_\${task_name}'" \
+        policy.lr=3e-5
 else
+    # python train.py \
+    #     --config-dir=. \
+    #     --config-name=train_ae_workspace.yaml \
+    #     "hydra.run.dir='${DATA_ROOT}/outputs/\${now:%Y.%m.%d}/\${now:%H.%M.%S}_\${name}_\${task_name}'" \
+    #     policy.lr=1e-3
+    # python train.py \
+    #     --config-dir=. \
+    #     --config-name=train_ae_workspace.yaml \
+    #     "hydra.run.dir='${DATA_ROOT}/outputs/\${now:%Y.%m.%d}/\${now:%H.%M.%S}_\${name}_\${task_name}'" \
+    #     policy.lr=5e-4
     python train.py \
         --config-dir=. \
         --config-name=train_ae_workspace.yaml \
-        "hydra.run.dir='${DATA_ROOT}/outputs/\${now:%Y.%m.%d}/\${now:%H.%M.%S}_\${name}_\${task_name}'"
+        "hydra.run.dir='${DATA_ROOT}/outputs/\${now:%Y.%m.%d}/\${now:%H.%M.%S}_\${name}_\${task_name}'" \
+        policy.lr=3e-4
+    python train.py \
+        --config-dir=. \
+        --config-name=train_ae_workspace.yaml \
+        "hydra.run.dir='${DATA_ROOT}/outputs/\${now:%Y.%m.%d}/\${now:%H.%M.%S}_\${name}_\${task_name}'" \
+        policy.lr=1e-4
+    python train.py \
+        --config-dir=. \
+        --config-name=train_ae_workspace.yaml \
+        "hydra.run.dir='${DATA_ROOT}/outputs/\${now:%Y.%m.%d}/\${now:%H.%M.%S}_\${name}_\${task_name}'" \
+        policy.lr=5e-5
+    python train.py \
+        --config-dir=. \
+        --config-name=train_ae_workspace.yaml \
+        "hydra.run.dir='${DATA_ROOT}/outputs/\${now:%Y.%m.%d}/\${now:%H.%M.%S}_\${name}_\${task_name}'" \
+        policy.lr=3e-5
 fi
+
+
+unset HYDRA_FULL_ERROR
+unset DATA_ROOT
+unset ZZY_DEBUG

@@ -24,6 +24,8 @@ from diffusion_policy.model.common.rotation_transformer import RotationTransform
 from diffusion_policy.codecs.imagecodecs_numcodecs import register_codecs, Jpeg2k
 from diffusion_policy.common.replay_buffer import ReplayBuffer
 from diffusion_policy.common.sampler import SequenceSampler, get_val_mask
+from diffusion_policy.dataset.robomimic_language_description import get_language_description, get_language_embedding
+from typing import Union
 from diffusion_policy.common.normalize_util import (
     robomimic_abs_action_only_normalizer_from_stat,
     robomimic_abs_action_only_dual_arm_normalizer_from_stat,
@@ -135,6 +137,7 @@ class RobomimicReplayImageDataset(BaseImageDataset):
         self.pad_before = pad_before
         self.pad_after = pad_after
         self.use_legacy_normalizer = use_legacy_normalizer
+        self.dataset_path = dataset_path
 
     def get_validation_dataset(self):
         val_set = copy.copy(self)
@@ -375,12 +378,41 @@ def normalizer_from_stat(stat):
         input_stats_dict=stat
     )
 
+class RobomimicReplayImageLanguageDataset(RobomimicReplayImageDataset):
+    def __init__(self,
+            shape_meta: dict,
+            dataset_path: str,
+            horizon=1,
+            pad_before=0,
+            pad_after=0,
+            n_obs_steps=None,
+            abs_action=False,
+            rotation_rep='rotation_6d', # ignored when abs_action=False
+            use_legacy_normalizer=False,
+            use_cache=False,
+            seed=42,
+            val_ratio=0.0
+        ):
+        super().__init__(shape_meta, dataset_path, horizon, pad_before, pad_after, n_obs_steps, abs_action, rotation_rep, use_legacy_normalizer, use_cache, seed, val_ratio)
+        # self.language_description = get_language_description(dataset_path)
+        self.language_embedding = get_language_embedding(dataset_path)
+
+    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+        data = super().__getitem__(idx)
+        # data['obs']['language_description'] = self.language_description
+        data['obs']['language_embedding'] = self.language_embedding
+        data['obs']['image'] = data['obs']['agentview_image']
+        del data['obs']['agentview_image']
+        return data
+    
+
 class RobomimicImageDatamodule(L.LightningDataModule):
-    def __init__(self, batch_size, num_workers, dataset: RobomimicReplayImageDataset):
+    def __init__(self, batch_size, num_workers, dataset: Union[RobomimicReplayImageDataset, RobomimicReplayImageLanguageDataset]):
         super().__init__()
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.dataset = dataset
+        self.language_description = get_language_description(dataset.dataset_path)
 
     def prepare_data(self):
         self.train_dataset = self.dataset
@@ -395,3 +427,6 @@ class RobomimicImageDatamodule(L.LightningDataModule):
 
     def val_dataloader(self):
         return DataLoader(self.val_dataset, batch_size=self.batch_size, num_workers=self.num_workers)
+
+
+

@@ -36,15 +36,16 @@ policy:
   n_heads: 8
   horizon: ${horizon}
   dropout: 0.1
-  lr: 3e-4
+  lr: 7e-4
   weight_decay: 0.0
-  warmup_steps: 1000
+  warmup_steps: 0
+  use_cosine_lr: False
   # language_feature_dim: 
   # low_dim_feature_dim:
   # with_obs: True
   # with_language: True
   # ckpt_path: 
-  kl_weight: 0.001
+  kl_weight: 0.00
   shape_meta: ${shape_meta}
 
 
@@ -65,10 +66,10 @@ datamodule:
 trainer:
   _target_: lightning.pytorch.trainer.Trainer
   # devices: [0, 1, 2, 3]
-  max_epochs: 200
+  max_epochs: 10000
   # pretrain_max_epochs: 10
   check_val_every_n_epoch: 100
-  log_every_n_steps: 10
+  log_every_n_steps: 1
   logger:
     _target_: lightning.pytorch.loggers.wandb.WandbLogger 
     project: latent_diffusion_policy_ae
@@ -84,7 +85,7 @@ trainer:
   #   _target_: lightning.pytorch.profilers.AdvancedProfiler
   #   dirpath: .
   #   filename: perf_logs
-  gradient_clip_val: 0.5
+  gradient_clip_val: 0.1
   callbacks:
     - _target_: lightning.pytorch.callbacks.ModelCheckpoint
       save_top_k: 1

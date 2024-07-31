@@ -1,4 +1,4 @@
-from diffusion_policy.model.diffusion.positional_embedding import SinusoidalPosEmb
+
 import copy
 import torch
 import torch.nn as nn
@@ -7,7 +7,7 @@ import torch.optim as optim
 from diffusers.optimization import get_cosine_schedule_with_warmup
 import numpy as np
 import lightning.pytorch as pl
-
+from diffusion_policy.model.common.normalizer import LinearNormalizer
 class ImageAdapter(nn.Module):
     def __init__(self, in_dim, out_dim) -> None:
         super().__init__()
@@ -160,6 +160,7 @@ class DownsampleCVAE(pl.LightningModule):
         lr: float,
         weight_decay: float,
         warmup_steps: int,
+        use_cosine_lr: bool=True,
         # mode,  # pretraining, finetuning, inference
         # all_config=None
     ):
@@ -176,7 +177,7 @@ class DownsampleCVAE(pl.LightningModule):
         #     model_kwargs = hyper_params['model_kwargs']
         #     model_kwargs.low_dim_feature_dim = low_dim_feature_dim
 
-        # initialze model
+        # initialize model
         # self.all_config = all_config
         self.sample_posterior = sample_posterior # indicates whether it's an autoencoder or vae
         # self.training_kwargs = training_kwargs
@@ -189,6 +190,7 @@ class DownsampleCVAE(pl.LightningModule):
         self.lr = lr
         self.weight_decay = weight_decay
         self.warmup_steps = warmup_steps
+        self.use_cosine_lr = use_cosine_lr
 
         self.action_emb = nn.Linear(action_dim, hidden_size)
 
@@ -217,7 +219,7 @@ class DownsampleCVAE(pl.LightningModule):
 
         self.register_buffer(
             'pe', get_pe(hidden_size=hidden_size, max_len=horizon*2))
-
+        self.normalizer: LinearNormalizer = None
         # self.with_obs = model_kwargs.get('with_obs', True)
         # if self.with_obs:
         #     if model_kwargs.get('low_dim_feature_dim') is not None:
@@ -301,18 +303,22 @@ class DownsampleCVAE(pl.LightningModule):
             lr=self.lr,
             weight_decay=self.weight_decay
         )
-        scheduler = get_cosine_schedule_with_warmup(optimizer, 
+        if self.use_cosine_lr:
+            scheduler = get_cosine_schedule_with_warmup(optimizer, 
                                     num_warmup_steps=self.warmup_steps, 
                                     num_training_steps=self.trainer.max_epochs * len(self.trainer.datamodule.train_dataloader()))
-        self.lr_scheduler = scheduler
+            self.lr_scheduler = scheduler
         # print(f'max steps: {self.trainer.max_epochs * len(self.trainer.datamodule.train_dataloader())}, max epochs: {self.trainer.max_epochs}')
-        return {
-            'optimizer': optimizer,
-            'lr_scheduler': {
-                'scheduler': scheduler,
-                'interval': 'step'
+        if self.use_cosine_lr:
+            return {
+                'optimizer': optimizer,
+                'lr_scheduler': {
+                    'scheduler': scheduler,
+                    'interval': 'step'
+                }
             }
-        }
+        else:
+            return optimizer
     
     # def get_obs_emb(self, raw_image_features, raw_low_dim_data):
     #     if self.with_obs:
@@ -344,7 +350,7 @@ class DownsampleCVAE(pl.LightningModule):
         # if obs_emb is not None:
             # z_encoder_input = torch.cat([z_encoder_input, obs_emb], dim=1)
 
-        z_encoder_output = self.z_encoder(z_encoder_input)[:, 0:1, :]
+        z_encoder_output = self.z_encoder(z_encoder_input)[:, 0, :] # take cls token as output
         z_encoder_output = self.z_down(z_encoder_output)
         posterior = DiagonalGaussianDistribution(z_encoder_output)
         return posterior #, obs_emb
@@ -357,10 +363,9 @@ class DownsampleCVAE(pl.LightningModule):
                 z = posterior.sample()
             else:
                 z = posterior.mode()
-        z = self.z_up(z)
-        batch_size = z.shape[0]
-        
-        condition_input = z
+        up_z = self.z_up(z)
+        batch_size = up_z.shape[0]
+        condition_input = up_z
         # if obs_emb is not None:
         #     condition_input = torch.cat([obs_emb, condition_input], dim=1)  # obs_emb, z
         # if self.with_language:
@@ -370,27 +375,29 @@ class DownsampleCVAE(pl.LightningModule):
         decoder_input = self.pe[:, :self.horizon, :].expand((batch_size, self.horizon, self.hidden_size))
         decoder_output = self.decoder(tgt=decoder_input, memory=condition)
         pred_action = self.action_head(decoder_output)
-        return pred_action
+        return z, pred_action
 
     def forward(self, batch, sample_posterior=True):
+        if self.normalizer is not None:
+            batch['action'] = self.normalizer['action'].normalize(batch['action'])
         posterior = self.encode(batch)
         if not self.sample_posterior:
             sample_posterior = False
-        pred_action = self.decode(posterior=posterior, sample_posterior=sample_posterior)
+        z, pred_action = self.decode(posterior=posterior, sample_posterior=sample_posterior)
 
         loss_dict = self.loss.recon_kl_loss(
             inputs=batch['action'], reconstructions=pred_action, posteriors=posterior)
-        return loss_dict, pred_action
+        return loss_dict, pred_action, z
     
     def training_step(self, batch, batch_idx):
-        loss_dict, _ = self.forward(batch=batch, sample_posterior=True)
+        loss_dict, _, _ = self.forward(batch=batch, sample_posterior=True)
         loss_dict = {f'train_{k}': v for k, v in loss_dict.items()}
         self.log_dict(loss_dict, sync_dist=True)
-        self.log('lr', self.lr_scheduler.get_last_lr()[0], sync_dist=True)
+        self.log('lr', self.optimizers().param_groups[0]['lr'], sync_dist=True)
         return loss_dict['train_total_loss']
 
     def validation_step(self, batch, batch_idx):
-        loss_dict, pred_action = self.forward(batch=batch, sample_posterior=False)
+        loss_dict, _, _ = self.forward(batch=batch, sample_posterior=False)
         loss_dict = {f'val_{k}': v for k, v in loss_dict.items()}
         self.log_dict(loss_dict, sync_dist=True)
         return loss_dict['val_total_loss']

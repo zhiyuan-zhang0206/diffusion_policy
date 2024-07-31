@@ -24,15 +24,16 @@ from diffusion_policy.workspace.base_workspace import BaseWorkspace
 from diffusion_policy.policy.latent_diffusion_policy import LatentDiffusionPolicy
 from diffusion_policy.dataset.base_dataset import BaseImageDataset
 from diffusion_policy.dataset.robomimic_replay_image_dataset import RobomimicReplayImageDataset
+from diffusion_policy.dataset.robomimic_replay_image_dataset import RobomimicImageDatamodule
 from diffusion_policy.env_runner.base_image_runner import BaseImageRunner
 from diffusion_policy.common.checkpoint_util import TopKCheckpointManager
 from diffusion_policy.common.json_logger import JsonLogger
 from diffusion_policy.common.pytorch_util import dict_apply, optimizer_to
 from diffusion_policy.model.diffusion.ema_model import EMAModel
 from diffusion_policy.model.common.lr_scheduler import get_scheduler
-
+import lightning as L
 OmegaConf.register_new_resolver("eval", eval, replace=True)
-
+torch.set_float32_matmul_precision('medium')
 class TrainLatentDiffusionWorkspace(BaseWorkspace):
     include_keys = ['global_step', 'epoch']
 
@@ -40,10 +41,7 @@ class TrainLatentDiffusionWorkspace(BaseWorkspace):
         super().__init__(cfg, output_dir=output_dir)
 
         # set seed
-        seed = cfg.training.seed
-        torch.manual_seed(seed)
-        np.random.seed(seed)
-        random.seed(seed)
+        L.seed_everything(cfg.seed)
 
         # configure model
         self.model: LatentDiffusionPolicy = hydra.utils.instantiate(cfg.policy)
@@ -52,41 +50,39 @@ class TrainLatentDiffusionWorkspace(BaseWorkspace):
         if cfg.training.use_ema:
             self.ema_model = copy.deepcopy(self.model)
 
-        # configure training state
-        self.optimizer = hydra.utils.instantiate(
-            cfg.optimizer, params=self.model.parameters())
+        self.trainer : L.Trainer = hydra.utils.instantiate(cfg.trainer)
 
-        # configure training state
-        self.global_step = 0
-        self.epoch = 0
+        self.datamodule : Union[L.LightningDataModule, RobomimicImageDatamodule] = hydra.utils.instantiate(cfg.datamodule)
 
     def run(self):
         # saved_path  = self.save_checkpoint()
         # logger.info(f"saved checkpoint to {saved_path}")
         # return
-        cfg = copy.deepcopy(self.cfg)
+        # cfg = copy.deepcopy(self.cfg)
 
-        # resume training
-        if cfg.training.resume:
-            lastest_ckpt_path = self.get_checkpoint_path()
-            if lastest_ckpt_path.is_file():
-                print(f"Resuming from checkpoint {lastest_ckpt_path}")
-                self.load_checkpoint(path=lastest_ckpt_path)
+        # # resume training
+        # if cfg.training.resume:
+        #     latest_ckpt_path = self.get_checkpoint_path()
+        #     if latest_ckpt_path.is_file():
+        #         print(f"Resuming from checkpoint {latest_ckpt_path}")
+        #         self.load_checkpoint(path=latest_ckpt_path)
 
-        # configure dataset
-        dataset: Union[BaseImageDataset, RobomimicReplayImageDataset]
-        dataset = hydra.utils.instantiate(cfg.task.dataset)
-        assert isinstance(dataset, BaseImageDataset)
-        train_dataloader = DataLoader(dataset, **cfg.dataloader)
-        normalizer = dataset.get_normalizer()
+        # # configure dataset
+        # dataset: Union[BaseImageDataset, RobomimicReplayImageDataset]
+        # dataset = hydra.utils.instantiate(cfg.task.dataset)
+        # assert isinstance(dataset, BaseImageDataset)
+        # train_dataloader = DataLoader(dataset, **cfg.dataloader)
+        # normalizer = dataset.get_normalizer()
 
         # configure validation dataset
-        val_dataset = dataset.get_validation_dataset()
-        val_dataloader = DataLoader(val_dataset, **cfg.val_dataloader)
+        # val_dataset = dataset.get_validation_dataset()
+        # val_dataloader = DataLoader(val_dataset, **cfg.val_dataloader)
 
-        self.model.set_normalizer(normalizer)
-        if cfg.training.use_ema:
-            self.ema_model.set_normalizer(normalizer)
+        # self.model.set_normalizer(normalizer)
+        # if cfg.training.use_ema:
+        #     self.ema_model.set_normalizer(normalizer)
+        self.trainer.fit(self.model.pl_model, datamodule=self.datamodule)
+        self.save_checkpoint()
         return
         # configure lr scheduler
         lr_scheduler = get_scheduler(

@@ -36,6 +36,7 @@ class AEPolicy(BaseImagePolicy):
             lr: float=3e-4,
             weight_decay: float=0.0,
             warmup_steps: int=1000,
+            use_cosine_lr: bool=True,
             # n_obs_steps,
             # crop_shape=(76, 76),
             ):
@@ -59,6 +60,7 @@ class AEPolicy(BaseImagePolicy):
             lr=lr,
             weight_decay=weight_decay,
             warmup_steps=warmup_steps,
+            use_cosine_lr=use_cosine_lr,
         )
         # obs_shape_meta = shape_meta['obs']
         # obs_config = {
@@ -106,7 +108,7 @@ class AEPolicy(BaseImagePolicy):
         # # init global state
         # ObsUtils.initialize_obs_utils_with_config(config)
 
-        # ckpt_path = Path('/home/zzy/Downloads/iomm4cfj/checkpoints/test.ckpt')
+        
         # self.autoencoder = torch.load(ckpt_path, pickle_module=dill)
         # # load model
         # policy: PolicyAlgo = algo_factory(
@@ -173,7 +175,7 @@ class AEPolicy(BaseImagePolicy):
         #     fix_obs_steps=True,
         #     action_visible=False
         # )
-        # self.normalizer = LinearNormalizer()
+        self.normalizer = LinearNormalizer()
         # self.horizon = horizon
         # self.obs_feature_dim = obs_feature_dim
         # self.action_dim = action_dim
@@ -198,10 +200,11 @@ class AEPolicy(BaseImagePolicy):
         # logger.debug(f"predict action called")
         # normalized_obs = self.normalizer.normalize(obs_dict)
         self.pl_model.eval()
-        loss_dict, pred_action = self.pl_model(obs_dict)
-        # pred_action = self.normalizer['action'].unnormalize(pred_action)
+        loss_dict, pred_action, z = self.pl_model(obs_dict)
+        if self.normalizer is not None:
+            pred_action = self.normalizer['action'].unnormalize(pred_action)
 
-        return {'action': pred_action, 'loss_dict': loss_dict}
+        return {'action': pred_action, 'loss_dict': loss_dict, 'z': z}
         # assert 'past_action' not in obs_dict # not implemented yet
         # # normalize input
         # nobs = self.normalizer.normalize(obs_dict)
@@ -265,6 +268,7 @@ class AEPolicy(BaseImagePolicy):
     # ========= training  ============
     def set_normalizer(self, normalizer: LinearNormalizer):
         self.normalizer.load_state_dict(normalizer.state_dict())
+        self.pl_model.normalizer = normalizer
 
     def compute_loss(self, batch):
         logger.debug(f"compute loss called")

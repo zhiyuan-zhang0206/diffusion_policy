@@ -26,7 +26,7 @@ policy:
   _target_: diffusion_policy.policy.latent_diffusion_policy.LatentDiffusionPolicy
   ae_path: ${ae_path}
   shape_meta: ${shape_meta}
-  
+  use_lr_scheduler: False
   # noise_scheduler:
     # _target_: diffusers.schedulers.scheduling_ddpm.DDPMScheduler
   num_train_timesteps: 100
@@ -37,7 +37,7 @@ policy:
   variance_type: fixed_small # Yilun's paper uses fixed_small_log instead, but easy to cause Nan
   clip_sample: True # required when predict_epsilon=False
   prediction_type: epsilon # or sample
-
+  lr: 2e-3
   # denoiser
   n_layers: 6
   n_heads: 8
@@ -71,7 +71,7 @@ policy:
 
 datamodule:
   _target_: diffusion_policy.dataset.robomimic_replay_image_dataset.RobomimicImageDatamodule
-  batch_size: 64
+  batch_size: 1024
   num_workers: 8
   dataset: ${task.dataset}
 
@@ -84,8 +84,8 @@ datamodule:
 
 trainer:
   _target_: lightning.pytorch.trainer.Trainer
-  max_epochs: 20
-  check_val_every_n_epoch: 2
+  max_epochs: 1000
+  check_val_every_n_epoch: 10
   log_every_n_steps: 1
   logger:
     _target_: lightning.pytorch.loggers.wandb.WandbLogger 
@@ -96,7 +96,7 @@ trainer:
   default_root_dir: ${oc.env:DATA_ROOT}/latent_dp_logs/
   # overfit_batches: 500
   # fast_dev_run: True
-  profiler: simple
+  # profiler: simple
   # profiler: 
   #   _target_: lightning.pytorch.profilers.AdvancedProfiler
   #   dirpath: .

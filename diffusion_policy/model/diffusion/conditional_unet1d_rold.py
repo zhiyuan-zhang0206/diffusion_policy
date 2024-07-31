@@ -35,6 +35,7 @@ class DownsampleObsLDM(pl.LightningModule):
         lr:float=1e-4,
         warmup_steps:int=1000,
         num_training_steps:int=100000,
+        use_lr_scheduler:bool=True,
         
         num_inference_timesteps:int=1000,
         num_train_timesteps:int= 100,
@@ -330,7 +331,7 @@ class DownsampleObsLDM(pl.LightningModule):
     #         self.log('train/model_mse_error', model_mse_error, sync_dist=True)
 
     def validation_step(self, batch, batch_idx):
-        forward_results = self.forward(batch=batch, batch_idx=batch_idx)
+        forward_results = self.forward(batch=batch)
         self.log('val/denoise_loss', forward_results, sync_dist=True, batch_size=batch['obs']['image'].shape[0])
 
         raw_action = batch['action']

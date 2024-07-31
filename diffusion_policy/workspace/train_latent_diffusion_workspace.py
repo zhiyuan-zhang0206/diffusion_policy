@@ -35,7 +35,7 @@ import lightning as L
 OmegaConf.register_new_resolver("eval", eval, replace=True)
 torch.set_float32_matmul_precision('medium')
 class TrainLatentDiffusionWorkspace(BaseWorkspace):
-    include_keys = ['global_step', 'epoch']
+    # include_keys = ['global_step', 'epoch']
 
     def __init__(self, cfg: OmegaConf, output_dir=None):
         super().__init__(cfg, output_dir=output_dir)

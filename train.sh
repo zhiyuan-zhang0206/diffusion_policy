@@ -44,36 +44,33 @@ if [ "$is_slurm" = "true" ]; then
         "hydra.run.dir='${DATA_ROOT}/outputs/\${now:%Y.%m.%d}/\${now:%H.%M.%S}_\${name}_\${task_name}'" \
         policy.lr=3e-5
 else
-    # python train.py \
+    export HYDRA_FULL_ERROR=1
+    export R3M_HOME="/home/zzy/robot/data/.r3m"
+    export HF_HOME="/home/zzy/robot/data/.huggingface"
+    export HF_ENDPOINT="https://hf-mirror.com"
+
+    python /home/zzy/robot/robot_zzy/diffusion_policy/train.py \
+        --config-dir=. \
+        --config-name=train_latent_diffusion_workspace.yaml \
+        "hydra.run.dir='${DATA_ROOT}/outputs/\${now:%Y.%m.%d}/\${now:%H.%M.%S}_\${name}_\${task_name}'" \
+        policy.lr=2e-3
+    # python /home/zzy/robot/robot_zzy/diffusion_policy/train.py \
     #     --config-dir=. \
-    #     --config-name=train_ae_workspace.yaml \
+    #     --config-name=train_latent_diffusion_workspace.yaml \
     #     "hydra.run.dir='${DATA_ROOT}/outputs/\${now:%Y.%m.%d}/\${now:%H.%M.%S}_\${name}_\${task_name}'" \
-    #     policy.lr=1e-3
-    # python train.py \
+    #     policy.lr=4e-4
+    # python /home/zzy/robot/robot_zzy/diffusion_policy/train.py \
     #     --config-dir=. \
-    #     --config-name=train_ae_workspace.yaml \
+    #     --config-name=train_latent_diffusion_workspace.yaml \
     #     "hydra.run.dir='${DATA_ROOT}/outputs/\${now:%Y.%m.%d}/\${now:%H.%M.%S}_\${name}_\${task_name}'" \
-    #     policy.lr=5e-4
-    python train.py \
-        --config-dir=. \
-        --config-name=train_ae_workspace.yaml \
-        "hydra.run.dir='${DATA_ROOT}/outputs/\${now:%Y.%m.%d}/\${now:%H.%M.%S}_\${name}_\${task_name}'" \
-        policy.lr=3e-4
-    python train.py \
-        --config-dir=. \
-        --config-name=train_ae_workspace.yaml \
-        "hydra.run.dir='${DATA_ROOT}/outputs/\${now:%Y.%m.%d}/\${now:%H.%M.%S}_\${name}_\${task_name}'" \
-        policy.lr=1e-4
-    python train.py \
-        --config-dir=. \
-        --config-name=train_ae_workspace.yaml \
-        "hydra.run.dir='${DATA_ROOT}/outputs/\${now:%Y.%m.%d}/\${now:%H.%M.%S}_\${name}_\${task_name}'" \
-        policy.lr=5e-5
-    python train.py \
-        --config-dir=. \
-        --config-name=train_ae_workspace.yaml \
-        "hydra.run.dir='${DATA_ROOT}/outputs/\${now:%Y.%m.%d}/\${now:%H.%M.%S}_\${name}_\${task_name}'" \
-        policy.lr=3e-5
+    #     policy.lr=1e-2
+    # python /home/zzy/robot/robot_zzy/diffusion_policy/train.py \
+    #     --config-dir=. \
+    #     --config-name=train_latent_diffusion_workspace.yaml \
+    #     "hydra.run.dir='${DATA_ROOT}/outputs/\${now:%Y.%m.%d}/\${now:%H.%M.%S}_\${name}_\${task_name}'" \
+    #     policy.lr=1e-4
+
+
 fi
 
 

@@ -51,7 +51,7 @@ def main(checkpoint, output_dir, device):
         cfg.task.env_runner['n_test_vis'] = 1
         cfg.task.env_runner['n_train'] = 1
         cfg.task.env_runner['n_train_vis'] = 1
-        cfg.task.env_runner['max_steps'] = 59
+        cfg.task.env_runner['max_steps'] = 64
     env_runner = hydra.utils.instantiate(
         cfg.task.env_runner,
         output_dir=output_dir)

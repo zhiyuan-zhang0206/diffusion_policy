@@ -1,7 +1,7 @@
 from diffusion_policy.model.common.normalizer import SingleFieldLinearNormalizer
 from diffusion_policy.common.pytorch_util import dict_apply, dict_apply_reduce, dict_apply_split
 import numpy as np
-
+from loguru import logger
 
 def get_range_normalizer_from_stat(stat, output_max=1, output_min=-1, range_eps=1e-7):
     # -1, 1 normalization
@@ -13,7 +13,7 @@ def get_range_normalizer_from_stat(stat, output_max=1, output_min=-1, range_eps=
     scale = (output_max - output_min) / input_range
     offset = output_min - scale * input_min
     offset[ignore_dim] = (output_max + output_min) / 2 - input_min[ignore_dim]
-
+    logger.info(f'Get range normalizer, scale: {scale}, offset: {offset}')
     return SingleFieldLinearNormalizer.create_manual(
         scale=scale,
         offset=offset,
@@ -149,7 +149,7 @@ def robomimic_abs_action_only_normalizer_from_stat(stat):
     info = dict_apply_reduce(
         [pos_info, other_info], 
         lambda x: np.concatenate(x,axis=-1))
-
+    logger.info(f'Robomimic abs action only normalizer, scale: {param["scale"]}, offset: {param["offset"]}')
     return SingleFieldLinearNormalizer.create_manual(
         scale=param['scale'],
         offset=param['offset'],
@@ -210,6 +210,32 @@ def robomimic_abs_action_only_dual_arm_normalizer_from_stat(stat):
         scale=param['scale'],
         offset=param['offset'],
         input_stats_dict=info
+    )
+
+
+def robomimic_abs_action_only_location_rotation_separate_normalizer_from_stat(stat):
+    """
+    stat: [pos(3), rot(6), gripper(1)]
+    We view each field as a separate space, and normalize each space separately.
+    Normalization range: [-1, 1]
+    """
+    eps = 1e-7
+    location_scale = 2 / (max(stat['max'][0:3] - stat['min'][0:3]) + eps)
+    location_offset = - location_scale * (stat['max'][0:3] + stat['min'][0:3]) / 2
+
+    rotation_scale = 2 / (max(stat['max'][3:9] - stat['min'][3:9]) + eps)
+    rotation_offset = - rotation_scale * (stat['max'][3:9] + stat['min'][3:9]) / 2
+
+    gripper_scale = 2 / (stat['max'][9] - stat['min'][9] + eps)
+    gripper_offset = - gripper_scale * (stat['max'][9] + stat['min'][9]) / 2
+
+    scale = np.array([location_scale] * 3 + [rotation_scale] * 6 + [gripper_scale], dtype=np.float32)
+    offset = np.concatenate([location_offset, rotation_offset, np.array([gripper_offset], dtype=np.float32)])
+    logger.info(f'Robomimic abs action only location rotation separate normalizer, scale: {scale}, offset: {offset}')
+    return SingleFieldLinearNormalizer.create_manual(
+        scale=scale,
+        offset=offset,
+        input_stats_dict=stat
     )
 
 

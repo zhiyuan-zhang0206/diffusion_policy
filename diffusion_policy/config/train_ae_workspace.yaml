@@ -1,6 +1,8 @@
 defaults:
   - _self_
-  - task: lift_lowdim_abs # lift_image_abs
+  # - task: lift_lowdim_abs
+  # - task: can_lowdim_abs
+  - task: square_lowdim_abs
 
 name: train_ae
 _target_: diffusion_policy.workspace.train_ae_workspace.TrainAEWorkspace
@@ -16,7 +18,7 @@ n_obs_steps: 1
 n_latency_steps: 0
 dataset_obs_steps: 1
 past_action_visible: False
-n_action_steps: 8
+n_action_steps: 16
 use_image_input: False
 use_language_input: False
 
@@ -24,6 +26,8 @@ seed: 3407
 
 training:
   use_ema: False
+
+# resume_ckpt_path: 
 
 policy:
   _target_: diffusion_policy.policy.ae_policy.AEPolicy
@@ -39,7 +43,7 @@ policy:
   lr: 7e-4
   weight_decay: 0.0
   warmup_steps: 0
-  use_cosine_lr: False
+  use_cosine_lr: True
   # language_feature_dim: 
   # low_dim_feature_dim:
   # with_obs: True
@@ -66,18 +70,19 @@ datamodule:
 trainer:
   _target_: lightning.pytorch.trainer.Trainer
   # devices: [0, 1, 2, 3]
-  max_epochs: 10000
+  max_epochs: 4000
   # pretrain_max_epochs: 10
   check_val_every_n_epoch: 100
   log_every_n_steps: 1
   logger:
     _target_: lightning.pytorch.loggers.wandb.WandbLogger 
     project: latent_diffusion_policy_ae
-    # name: 
-    save_dir: ${oc.env:DATA_ROOT}/latent_dp_logs/
+    name: 
+    save_dir:
   num_sanity_val_steps: 2
   # strategy: ddp
   default_root_dir: ${oc.env:DATA_ROOT}/latent_dp_logs/
+  # fast_dev_run: True
   # overfit_batches: 500
   # fast_dev_run: True
   # profiler: simple
@@ -93,6 +98,7 @@ trainer:
       save_weights_only: False
       monitor: val_total_loss
       mode: min
+      dirpath:
     - _target_: lightning.pytorch.callbacks.TQDMProgressBar
       # refresh_rate: 100
 

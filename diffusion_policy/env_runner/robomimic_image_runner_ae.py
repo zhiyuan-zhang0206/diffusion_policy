@@ -8,6 +8,8 @@ import tqdm
 import h5py
 import math
 import dill
+import pickle
+from pathlib import Path
 import wandb.sdk.data_types.video as wv
 from diffusion_policy.gym_util.async_vector_env import AsyncVectorEnv
 from diffusion_policy.gym_util.sync_vector_env import SyncVectorEnv
@@ -16,6 +18,7 @@ from diffusion_policy.gym_util.video_recording_wrapper import VideoRecordingWrap
 from diffusion_policy.model.common.rotation_transformer import RotationTransformer
 from diffusion_policy.common.replay_buffer import ReplayBuffer
 from diffusion_policy.dataset.robomimic_replay_lowdim_dataset import RobomimicLowdimDatamodule
+from diffusion_policy.dataset.robomimic_language_description import get_language_description, get_language_embedding
 from diffusion_policy.policy.base_image_policy import BaseImagePolicy
 from diffusion_policy.common.pytorch_util import dict_apply
 from diffusion_policy.env_runner.base_image_runner import BaseImageRunner
@@ -23,6 +26,7 @@ from diffusion_policy.env.robomimic.robomimic_image_wrapper import RobomimicImag
 import robomimic.utils.file_utils as FileUtils
 import robomimic.utils.env_utils as EnvUtils
 import robomimic.utils.obs_utils as ObsUtils
+from loguru import logger
 
 
 def create_env(env_meta, shape_meta, enable_render=True):
@@ -97,6 +101,8 @@ class RobomimicImageRunnerAE(BaseImageRunner):
 
         # assert n_obs_steps <= n_action_steps
         dataset_path = os.path.expanduser(dataset_path)
+        self.language_description = get_language_description(dataset_path)
+        self.language_embedding = get_language_embedding(dataset_path)
         robosuite_fps = 20
         steps_per_render = max(robosuite_fps // fps, 1)
 
@@ -264,6 +270,10 @@ class RobomimicImageRunnerAE(BaseImageRunner):
         self.replay_buffer: ReplayBuffer = workspace.datamodule.dataset.replay_buffer
         self.datamodule: RobomimicLowdimDatamodule = workspace.datamodule
 
+    def set_action_steps(self, n_action_steps):
+        if n_action_steps is not None:
+            self.n_action_steps = n_action_steps
+
     def run(self, policy: BaseImagePolicy):
         device = policy.device
         dtype = policy.dtype
@@ -312,22 +322,31 @@ class RobomimicImageRunnerAE(BaseImageRunner):
             env_name = self.env_meta['env_name']
             pbar = tqdm.tqdm(total=self.max_steps, desc=f"Eval {env_name}Image {chunk_idx+1}/{n_chunks}", 
                 leave=False, mininterval=self.tqdm_interval_sec)
-            # from pathlib import Path
-            # import pickle
-            # with Path(__file__).parent.joinpath('env_actions.pkl').open('rb') as f:
-            #     self.env_actions : list = pickle.load(f)['abs']
-            self.env_actions = self.replay_buffer['action'][:self.replay_buffer.episode_ends[0]]
-            tail = [self.env_actions[-1]] * (self.horizon)
-            self.env_actions = np.concatenate([self.env_actions, tail])
-            # env_actions_array = np.concatenate([arr for arr in self.env_actions])
-            env_actions_array = self.env_actions
-            self.env_actions = [env_actions_array[i:i+self.horizon][np.newaxis] for i in range(len(env_actions_array)//self.n_action_steps)]
+            
+            # self.n_action_steps = 1
+            # temp_action_path = Path(__file__).parent.joinpath('env_actions.pkl')
+            # if temp_action_path.exists():
+            #     with temp_action_path.open('rb') as f:
+            #         self.env_actions = pickle.load(f)
+            # else:
+            if hasattr(self, 'replay_buffer'):
+                self.env_actions = self.replay_buffer['action'][:self.replay_buffer.episode_ends[0]]
+                tail = [self.env_actions[-1]] * (self.horizon * 3 - 1)
+                self.env_actions = np.concatenate([self.env_actions, tail])
+                with Path(__file__).parent.joinpath('env_actions.pkl').open('wb') as f:
+                    pickle.dump(self.env_actions, f)
+
+                env_actions_array = self.env_actions
+                self.env_actions = [env_actions_array[i * self.n_action_steps : i * self.n_action_steps +self.horizon][np.newaxis] for i in range(len(env_actions_array)//self.n_action_steps)]
+            else:
+                self.env_actions = [np.zeros((1, 10))] * 1000
 
             done = False
             index = -1
             while not done:
                 index += 1
                 # create obs dict
+                obs['language_embedding'] = self.language_embedding
                 np_obs_dict = dict(obs)
                 # if self.past_action and (past_action is not None):
                 #     # TODO: not tested
@@ -341,15 +360,20 @@ class RobomimicImageRunnerAE(BaseImageRunner):
                     lambda x: torch.from_numpy(x).to(
                         device=device))
 
+                # obs_dict['action'][:, :, :3] += torch.randn_like(obs_dict['action'][:, :, :3]) * 0.17
                 # run policy
                 with torch.no_grad():
                     action_dict = policy.predict_action(obs_dict)
 
                 # device_transfer
                 np_action_dict = dict_apply(action_dict,
-                    lambda x: x.detach().to('cpu').numpy())
+                    lambda x: x.detach().to('cpu').numpy(), True)
+                # data_action = data_action[:, :self.n_action_steps, :]
                 action = np_action_dict['action'][:, :self.n_action_steps, :]
-                print(np_action_dict['loss_dict']['rec_loss'])
+                # print(torch.nn.functional.mse_loss(torch.tensor(data_action), torch.tensor(action)).numpy())
+                # action = data_action
+                # print(np_action_dict['rec_loss_unnormalized'])
+                # print(np_action_dict['rec_loss'], '\n')
                 if not np.all(np.isfinite(action)):
                     print(action)
                     raise RuntimeError("Nan or Inf action")
@@ -402,7 +426,8 @@ class RobomimicImageRunnerAE(BaseImageRunner):
             name = prefix+'mean_score'
             value = np.mean(value)
             log_data[name] = value
-
+        logger.info(log_data)
+        logger.info(f'test mean score: {log_data["test/mean_score"]}')
         return log_data
 
     def undo_transform_action(self, action):

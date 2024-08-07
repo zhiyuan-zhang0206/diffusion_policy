@@ -5,14 +5,21 @@ import torch.nn as nn
 
 def dict_apply(
         x: Dict[str, torch.Tensor], 
-        func: Callable[[torch.Tensor], torch.Tensor]
+        func: Callable[[torch.Tensor], torch.Tensor],
+        ignore_exceptions: bool = False
         ) -> Dict[str, torch.Tensor]:
     result = dict()
     for key, value in x.items():
         if isinstance(value, dict):
-            result[key] = dict_apply(value, func)
+            result[key] = dict_apply(value, func, ignore_exceptions=ignore_exceptions)
         else:
-            result[key] = func(value)
+            try:
+                result[key] = func(value)
+            except Exception as e:
+                if ignore_exceptions:
+                    continue
+                else:
+                    raise e
     return result
 
 def pad_remaining_dims(x, target):

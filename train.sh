@@ -18,61 +18,34 @@ elif [ "$username" = "zhiyuan" ]; then
     fi
 fi
 
+echo "*** Entering train.sh ***"
+echo "username: $username"
+echo "project_code_root: $project_code_root"
+echo "data_root: $data_root"
+echo "is_slurm: $is_slurm"
+
 export HYDRA_FULL_ERROR=1
 export DATA_ROOT=$data_root
 export ZZY_DEBUG=True
+export R3M_HOME=$DATA_ROOT/.r3m
+export HF_HOME=$DATA_ROOT/.huggingface
+export HF_ENDPOINT="https://hf-mirror.com"
 
 if [ "$is_slurm" = "true" ]; then
-    srun python train.py \
-        --config-dir=. \
-        --config-name=train_ae_workspace.yaml \
-        "hydra.run.dir='${DATA_ROOT}/outputs/\${now:%Y.%m.%d}/\${now:%H.%M.%S}_\${name}_\${task_name}'" \
-        policy.lr=3e-4
-    srun python train.py \
-        --config-dir=. \
-        --config-name=train_ae_workspace.yaml \
-        "hydra.run.dir='${DATA_ROOT}/outputs/\${now:%Y.%m.%d}/\${now:%H.%M.%S}_\${name}_\${task_name}'" \
-        policy.lr=1e-4
-    srun python train.py \
-        --config-dir=. \
-        --config-name=train_ae_workspace.yaml \
-        "hydra.run.dir='${DATA_ROOT}/outputs/\${now:%Y.%m.%d}/\${now:%H.%M.%S}_\${name}_\${task_name}'" \
-        policy.lr=5e-5
-    srun python train.py \
-        --config-dir=. \
-        --config-name=train_ae_workspace.yaml \
-        "hydra.run.dir='${DATA_ROOT}/outputs/\${now:%Y.%m.%d}/\${now:%H.%M.%S}_\${name}_\${task_name}'" \
-        policy.lr=3e-5
+    export WANDB_MODE=offline
+    cmd_prefix="srun"
 else
-    export HYDRA_FULL_ERROR=1
-    export R3M_HOME="/home/zzy/robot/data/.r3m"
-    export HF_HOME="/home/zzy/robot/data/.huggingface"
-    export HF_ENDPOINT="https://hf-mirror.com"
-
-    python /home/zzy/robot/robot_zzy/diffusion_policy/train.py \
-        --config-dir=. \
-        --config-name=train_latent_diffusion_workspace.yaml \
-        "hydra.run.dir='${DATA_ROOT}/outputs/\${now:%Y.%m.%d}/\${now:%H.%M.%S}_\${name}_\${task_name}'" \
-        policy.lr=2e-3
-    # python /home/zzy/robot/robot_zzy/diffusion_policy/train.py \
-    #     --config-dir=. \
-    #     --config-name=train_latent_diffusion_workspace.yaml \
-    #     "hydra.run.dir='${DATA_ROOT}/outputs/\${now:%Y.%m.%d}/\${now:%H.%M.%S}_\${name}_\${task_name}'" \
-    #     policy.lr=4e-4
-    # python /home/zzy/robot/robot_zzy/diffusion_policy/train.py \
-    #     --config-dir=. \
-    #     --config-name=train_latent_diffusion_workspace.yaml \
-    #     "hydra.run.dir='${DATA_ROOT}/outputs/\${now:%Y.%m.%d}/\${now:%H.%M.%S}_\${name}_\${task_name}'" \
-    #     policy.lr=1e-2
-    # python /home/zzy/robot/robot_zzy/diffusion_policy/train.py \
-    #     --config-dir=. \
-    #     --config-name=train_latent_diffusion_workspace.yaml \
-    #     "hydra.run.dir='${DATA_ROOT}/outputs/\${now:%Y.%m.%d}/\${now:%H.%M.%S}_\${name}_\${task_name}'" \
-    #     policy.lr=1e-4
-
-
+    cmd_prefix=""
 fi
 
+$cmd_prefix python train.py \
+    --config-dir=. \
+    --config-name=train_latent_diffusion_workspace.yaml \
+    "hydra.run.dir='${DATA_ROOT}/outputs/\${now:%Y.%m.%d}/\${now:%H.%M.%S}_\${name}_\${task_name}'" \
+
+if [ "$is_slurm" = "true" ]; then
+    unset WANDB_MODE
+fi
 
 unset HYDRA_FULL_ERROR
 unset DATA_ROOT

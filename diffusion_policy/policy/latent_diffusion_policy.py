@@ -18,8 +18,10 @@ from diffusion_policy.model.diffusion.conditional_unet1d_rold import DownsampleO
 # import robomimic.utils.obs_utils as ObsUtils
 # import robomimic.models.base_nets as rmbn
 # import diffusion_policy.model.vision.crop_randomizer as dmvc
+from diffusion_policy.model.vision.r3m import R3MImageEncoderWrapper
 from diffusion_policy.common.pytorch_util import dict_apply, replace_submodules
 from loguru import logger
+import lightning as L
 
 class LatentDiffusionPolicy(BaseImagePolicy):
     def __init__(self, 
@@ -27,9 +29,10 @@ class LatentDiffusionPolicy(BaseImagePolicy):
             ae_path:str,
         
             hidden_size:int=256,
-            # latent_size:int=256,
             horizon:int=16,
             language_feature_dim:int=768,
+            image_feature_dim:int=512,
+            load_image_features:bool=True,
             low_dim_feature_dim:int=None,
             n_layers:int=6,
             n_heads:int=8,
@@ -54,10 +57,11 @@ class LatentDiffusionPolicy(BaseImagePolicy):
         self.normalizer = LinearNormalizer()
         self.pl_model = DownsampleObsLDM(
             ae_path=ae_path,
-
             hidden_size=hidden_size,
             horizon=horizon,
             language_feature_dim=language_feature_dim,
+            image_feature_dim=image_feature_dim,
+            load_image_features=load_image_features,
             low_dim_feature_dim=low_dim_feature_dim,
             n_layers=n_layers,
             n_heads=n_heads,
@@ -65,7 +69,7 @@ class LatentDiffusionPolicy(BaseImagePolicy):
 
             lr=lr,
             warmup_steps=warmup_steps,
-            num_training_steps=num_training_steps,
+            # num_training_steps=num_training_steps,
             use_lr_scheduler=use_lr_scheduler,
             num_inference_timesteps=num_inference_timesteps,
             num_train_timesteps=num_train_timesteps,
@@ -76,6 +80,7 @@ class LatentDiffusionPolicy(BaseImagePolicy):
             clip_sample=clip_sample,
             prediction_type=prediction_type,
         )
+        # self.pl_model  = DownsampleObsLDM.load_from_checkpoint("/home/zzy/robot/data/diffusion_policy_data/data/latent_diffusion_policy_ldm/2024-08-05_22-45-36/last.ckpt")
         self.shape_meta = shape_meta
 
     # ========= inference  ============
@@ -124,15 +129,32 @@ class LatentDiffusionPolicy(BaseImagePolicy):
         obs_dict: must include "obs" key
         result: must include "action" key
         """
-        import zzy_utils
-        zzy_utils.pretty_print(obs_dict)
-        print()
-        
+        # import zzy_utils
+        # zzy_utils.pretty_print(obs_dict)
+        # print()
+        input_dict = self.prepare_input(obs_dict)
+        pred_dict = self.pl_model.predict_action(input_dict, unnormalize_output=True)
+        pred_dict['action'] = pred_dict['unnormalized_pred_action'].detach()
+        return pred_dict
+    
+    def prepare_input(self, obs_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        batch_size = obs_dict['agentview_image'].shape[0]
+        input_dict = {'obs': {'image': obs_dict['agentview_image'], 'language_embedding': obs_dict['language_embedding'].unsqueeze(0).expand(batch_size, -1)}}
+        if hasattr(self.pl_model, 'image_encoder'):
+            pass
+        else:
+            if hasattr(self, 'image_encoder'):
+                input_dict['obs']['image_features'] = self.image_encoder(input_dict['obs']['image'])
+            else:
+                self.image_encoder = R3MImageEncoderWrapper()
+                input_dict['obs']['image_features'] = self.image_encoder(input_dict['obs']['image'])
+        return input_dict
 
     # ========= training  ============
-    def set_normalizer(self, normalizer: LinearNormalizer):
+    def set_normalizer(self, normalizer: LinearNormalizer, datamodule: L.LightningDataModule):
         self.normalizer.load_state_dict(normalizer.state_dict())
-        self.pl_model.normalizer = self.normalizer
+        # self.pl_model.autoencoder.set_normalizer(normalizer)
+        self.pl_model.set_normalizer(datamodule)
 
     def compute_loss(self, batch):
         logger.debug(f"compute loss called")

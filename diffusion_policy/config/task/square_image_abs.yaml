@@ -21,11 +21,11 @@ shape_meta: &shape_meta
 
 task_name: &task_name square
 dataset_type: &dataset_type ph
-dataset_path: &dataset_path data/robomimic/datasets/${task.task_name}/${task.dataset_type}/image_abs.hdf5
+dataset_path: &dataset_path ${oc.env:DATA_ROOT}/robomimic/datasets/${task.task_name}/${task.dataset_type}/image_abs.hdf5
 abs_action: &abs_action True
 
 env_runner:
-  _target_: diffusion_policy.env_runner.robomimic_image_runner.RobomimicImageRunner
+  _target_: diffusion_policy.env_runner.robomimic_image_runner_ae.RobomimicImageRunnerAE
   dataset_path: *dataset_path
   shape_meta: *shape_meta
   # costs 1GB per env
@@ -49,7 +49,7 @@ env_runner:
 # evaluation at this config requires a 16 core 64GB instance.
 
 dataset:
-  _target_: diffusion_policy.dataset.robomimic_replay_image_dataset.RobomimicReplayImageDataset
+  _target_: diffusion_policy.dataset.robomimic_replay_image_dataset.RobomimicReplayImageLanguageDataset
   shape_meta: *shape_meta
   dataset_path: *dataset_path
   horizon: ${horizon}
@@ -62,3 +62,4 @@ dataset:
   use_cache: True
   seed: 42
   val_ratio: 0.02
+  load_image_features: ${load_image_features}

@@ -1,5 +1,6 @@
 
 import copy
+from typing import Any
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -8,6 +9,8 @@ from diffusers.optimization import get_cosine_schedule_with_warmup
 import numpy as np
 import lightning.pytorch as pl
 from diffusion_policy.model.common.normalizer import LinearNormalizer
+from loguru import logger
+
 class ImageAdapter(nn.Module):
     def __init__(self, in_dim, out_dim) -> None:
         super().__init__()
@@ -42,7 +45,7 @@ class DiagonalGaussianDistribution(object):
             return torch.Tensor([0.])
         else:
             if other is None:
-                return 0.5 * torch.sum(torch.pow(self.mean, 2) + self.var - 1.0 - self.logvar, dim=[1,2])
+                return 0.5 * torch.sum(torch.pow(self.mean, 2) + self.var - 1.0 - self.logvar, dim=1)
             else:
                 return 0.5 * torch.sum(
                     torch.pow(self.mean - other.mean, 2) / other.var
@@ -154,33 +157,17 @@ class DownsampleCVAE(pl.LightningModule):
         n_encoder_layers: int,
         n_decoder_layers: int,
         dropout: float,
-        # training_kwargs: dict,
         sample_posterior: bool, 
         kl_weight: float,
         lr: float,
         weight_decay: float,
         warmup_steps: int,
         use_cosine_lr: bool=True,
-        # mode,  # pretraining, finetuning, inference
-        # all_config=None
     ):
         super().__init__()
-        # ckpt_path = model_kwargs.ckpt_path
-        # if ckpt_path is not None:
-        #     ckpt = torch.load(ckpt_path, map_location='cpu')
-        #     # reloading config from ckpt
-        #     hyper_params = copy.deepcopy(ckpt['hyper_parameters'])
 
-        #     # replace all the model config to the original
-        #     # but keep low_dim_feature_dim obtained in main.preprocess_config
-        #     low_dim_feature_dim = model_kwargs.low_dim_feature_dim
-        #     model_kwargs = hyper_params['model_kwargs']
-        #     model_kwargs.low_dim_feature_dim = low_dim_feature_dim
-
-        # initialize model
-        # self.all_config = all_config
         self.sample_posterior = sample_posterior # indicates whether it's an autoencoder or vae
-        # self.training_kwargs = training_kwargs
+
         self.save_hyperparameters()
 
         self.action_dim = action_dim
@@ -219,87 +206,13 @@ class DownsampleCVAE(pl.LightningModule):
 
         self.register_buffer(
             'pe', get_pe(hidden_size=hidden_size, max_len=horizon*2))
-        self.normalizer: LinearNormalizer = None
-        # self.with_obs = model_kwargs.get('with_obs', True)
-        # if self.with_obs:
-        #     if model_kwargs.get('low_dim_feature_dim') is not None:
-        #         assert mode == 'finetuning' or mode == 'inference'
-        #         self.low_dim_emb = nn.Linear(model_kwargs['low_dim_feature_dim'], hidden_size)
-        #     else:
-        #         assert mode == 'pretraining'
-        #         self.low_dim_emb = None
-
-        # if self.with_obs:  # fix this in config
-        #     if hidden_size == 512:
-        #         self.img_emb = ResBottleneck(hidden_size=hidden_size)
-        #     else:
-        #         self.img_emb = ImageAdapter(in_dim=512, out_dim=hidden_size)
-
-        # self.with_language = model_kwargs.get('with_language', False)
-        # if self.with_language:
-        #     self.language_emb = nn.Linear(in_features=768, out_features=hidden_size)
-
-        # self.last_training_batch = None
-
-        # if ckpt_path is not None:
-        #     if mode == 'finetuning':
-        #         self.load_state_dict(ckpt['state_dict'], strict=False)  # no low_dim during pretraining
-        #     elif mode == 'inference' or mode == 'pretraining':  # pretraining ldm load the pretrained ae
-        #         self.load_state_dict(ckpt['state_dict'])  # load the whole ckpt
-        #     del ckpt
-        #     print(f'WARNING: ignoring AE config, AE loaded from {ckpt_path}')
-        # else:
-        #     self.apply(self._init_weights)
-    
-    # def _init_weights(self, module):
-    #     ignore_types = (nn.Dropout, 
-    #         SinusoidalPosEmb, 
-    #         nn.TransformerEncoderLayer, 
-    #         nn.TransformerDecoderLayer,
-    #         nn.TransformerEncoder,
-    #         nn.TransformerDecoder,
-    #         nn.ModuleList,
-    #         nn.Mish,
-    #         nn.Sequential,
-    #         WrappedTransformerDecoder,
-    #         WrappedTransformerEncoder,
-    #         nn.LeakyReLU,
-    #         ResBottleneck,
-    #         AutoencoderLoss,
-    #         ImageAdapter
-    #     )
-    #     if isinstance(module, (nn.Linear, nn.Embedding)):
-    #         torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
-    #         if isinstance(module, nn.Linear) and module.bias is not None:
-    #             torch.nn.init.zeros_(module.bias)
-    #     elif isinstance(module, nn.MultiheadAttention):
-    #         weight_names = [
-    #             'in_proj_weight', 'q_proj_weight', 'k_proj_weight', 'v_proj_weight']
-    #         for name in weight_names:
-    #             weight = getattr(module, name)
-    #             if weight is not None:
-    #                 torch.nn.init.normal_(weight, mean=0.0, std=0.02)
-            
-    #         bias_names = ['in_proj_bias', 'bias_k', 'bias_v']
-    #         for name in bias_names:
-    #             bias = getattr(module, name)
-    #             if bias is not None:
-    #                 torch.nn.init.zeros_(bias)
-    #     elif isinstance(module, nn.LayerNorm):
-    #         torch.nn.init.zeros_(module.bias)
-    #         torch.nn.init.ones_(module.weight)
-    #     elif isinstance(module, DownsampleCVAE):
-    #         torch.nn.init.normal_(module.cls, mean=0.0, std=0.02)
-    #     elif isinstance(module, ignore_types):
-    #         # no param
-    #         pass
-    #     else:
-    #         raise RuntimeError("Unaccounted module {}".format(module))
-    
+        self.normalizer = LinearNormalizer()
+        
     def configure_optimizers(self):
-        tuned_parameters = [p for p in self.parameters() if p.requires_grad]
+        tuned_named_parameters = [(name, param) for name, param in self.named_parameters() if param.requires_grad and 'normalizer' not in name]
+        logger.debug('\n'.join([f'{name}: {param.shape}' for name, param in tuned_named_parameters]))
         optimizer = torch.optim.AdamW(
-            tuned_parameters,
+            [p for _, p in tuned_named_parameters],
             lr=self.lr,
             weight_decay=self.weight_decay
         )
@@ -320,25 +233,13 @@ class DownsampleCVAE(pl.LightningModule):
         else:
             return optimizer
     
-    # def get_obs_emb(self, raw_image_features, raw_low_dim_data):
-    #     if self.with_obs:
-    #         image_emb = self.img_emb(raw_image_features)
-    #         if raw_low_dim_data is not None and self.low_dim_emb is not None:
-    #             low_dim_emb = self.low_dim_emb(raw_low_dim_data)
-    #             return torch.cat([image_emb, low_dim_emb], dim=1)
-    #         else:
-    #             return image_emb
-    #     else:
-    #         return None
-
-    # def get_language_emb(self, raw_language_features):
-    #     if self.with_language:
-    #         return self.language_emb(raw_language_features)
-    #     else:
-    #         return None
-    
-    def encode(self, batch):
-        action = batch['action']
+    def encode(self, batch, normalize_input=True):
+        if normalize_input:
+            normalized_action = self.normalize_input(batch)
+            action = normalized_action
+        else:
+            normalized_action = None
+            action = batch['action']
         # obs_emb = self.get_obs_emb(raw_image_features=batch['image'], raw_low_dim_data=batch.get('low_dim'))
 
         batch_size = action.shape[0]
@@ -353,9 +254,9 @@ class DownsampleCVAE(pl.LightningModule):
         z_encoder_output = self.z_encoder(z_encoder_input)[:, 0, :] # take cls token as output
         z_encoder_output = self.z_down(z_encoder_output)
         posterior = DiagonalGaussianDistribution(z_encoder_output)
-        return posterior #, obs_emb
+        return {'posterior': posterior, 'normalized_action': normalized_action}
     
-    def decode(self, posterior=None, z=None, sample_posterior=True):
+    def decode(self, posterior=None, z=None, sample_posterior=True, unnormalize_output=True):
         if not self.sample_posterior:
             sample_posterior = False
         if z is None:
@@ -363,44 +264,86 @@ class DownsampleCVAE(pl.LightningModule):
                 z = posterior.sample()
             else:
                 z = posterior.mode()
+        # z += torch.randn_like(z) * 4
         up_z = self.z_up(z)
         batch_size = up_z.shape[0]
-        condition_input = up_z
-        # if obs_emb is not None:
-        #     condition_input = torch.cat([obs_emb, condition_input], dim=1)  # obs_emb, z
-        # if self.with_language:
-        #     condition_input = torch.cat([self.get_language_emb(raw_language_features), condition_input], dim=1)  # lang, obs, z
+        condition_input = up_z.unsqueeze(1)
         condition = self.conditioner(condition_input)
 
         decoder_input = self.pe[:, :self.horizon, :].expand((batch_size, self.horizon, self.hidden_size))
         decoder_output = self.decoder(tgt=decoder_input, memory=condition)
-        pred_action = self.action_head(decoder_output)
-        return z, pred_action
+        pred = self.action_head(decoder_output)
 
-    def forward(self, batch, sample_posterior=True):
+        return {
+            'z': z,
+            'pred': pred,
+            'unnormalized_pred': self.unnormalize_output(pred) if unnormalize_output else None
+        }
+
+    def normalize_input(self, batch):
         if self.normalizer is not None:
-            batch['action'] = self.normalizer['action'].normalize(batch['action'])
-        posterior = self.encode(batch)
+            normalized_action = self.normalizer['action'].normalize(batch['action'])
+            return normalized_action
+        else:
+            raise ValueError("Normalizer is not set")
+
+    def unnormalize_output(self, pred):
+        if self.normalizer is not None:
+            pred = self.normalizer['action'].unnormalize(pred)
+            return pred
+        else:
+            raise ValueError("Normalizer is not set")
+
+    def forward(self, batch, sample_posterior=True, normalize_input=True, unnormalize_output=True):
+        """
+        normalize_input: whether to normalize the input
+        unnormalize_output: whether to unnormalize the output
+        Loss is always computed in normalized space.
+        """
+        encoding_output = self.encode(batch, normalize_input=normalize_input)
         if not self.sample_posterior:
             sample_posterior = False
-        z, pred_action = self.decode(posterior=posterior, sample_posterior=sample_posterior)
-
+        decoding_output = self.decode(posterior=encoding_output['posterior'], sample_posterior=sample_posterior, unnormalize_output=unnormalize_output)
+        
         loss_dict = self.loss.recon_kl_loss(
-            inputs=batch['action'], reconstructions=pred_action, posteriors=posterior)
-        return loss_dict, pred_action, z
+            inputs=encoding_output['normalized_action'] if normalize_input else batch['action'], 
+            reconstructions=decoding_output['pred'], 
+            posteriors=encoding_output['posterior'])
+        rec_loss_unnormalized = F.mse_loss(decoding_output['unnormalized_pred'].detach(), batch['action'].detach())
+
+        # return loss_dict | decoding_output | encoding_output
+        return {
+            "rec_loss": loss_dict['rec_loss'],
+            "kl_loss": loss_dict['kl_loss'],
+            "total_loss": loss_dict['total_loss'],
+            "rec_loss_unnormalized": rec_loss_unnormalized,
+            'z': decoding_output['z'],
+            'pred': decoding_output['pred'],
+            'unnormalized_pred': decoding_output['unnormalized_pred'],
+            'posterior': encoding_output['posterior'],
+            'normalized_action': encoding_output['normalized_action']
+        }
     
     def training_step(self, batch, batch_idx):
-        loss_dict, _, _ = self.forward(batch=batch, sample_posterior=True)
-        loss_dict = {f'train_{k}': v for k, v in loss_dict.items()}
-        self.log_dict(loss_dict, sync_dist=True)
+        forward_output = self.forward(batch=batch, sample_posterior=True, normalize_input=True)
+        loss_dict = {f'train_{k}': v for k, v in forward_output.items() if 'loss' in k}
+        self.log_dict(loss_dict, sync_dist=True, prog_bar=True)
         self.log('lr', self.optimizers().param_groups[0]['lr'], sync_dist=True)
         return loss_dict['train_total_loss']
 
     def validation_step(self, batch, batch_idx):
-        loss_dict, _, _ = self.forward(batch=batch, sample_posterior=False)
-        loss_dict = {f'val_{k}': v for k, v in loss_dict.items()}
+        forward_output = self.forward(batch=batch, sample_posterior=False, normalize_input=True)
+        loss_dict = {f'val_{k}': v for k, v in forward_output.items() if 'loss' in k}
         self.log_dict(loss_dict, sync_dist=True)
         return loss_dict['val_total_loss']
+
+    def set_normalizer(self, normalizer):
+        self.normalizer = normalizer
+        logger.info(f'Normalizer set: {self.normalizer}')
+
+    def predict_step(self, batch):
+        self.eval()
+        return self.forward(batch=batch, sample_posterior=False, normalize_input=True, unnormalize_output=True)
 
 class ResBottleneck(nn.Module):
     def __init__(self, hidden_size, norm=True) -> None:

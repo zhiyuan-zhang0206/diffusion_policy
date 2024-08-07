@@ -1,4 +1,12 @@
-from typing import Dict, List
+if __name__ == "__main__":
+    import sys
+    from pathlib import Path
+    sys.path.append(str(Path(__file__).parent.parent.parent))
+
+
+
+from typing import Dict, List, Literal
+from lightning.pytorch.utilities.types import EVAL_DATALOADERS
 import torch
 import numpy as np
 import h5py
@@ -11,11 +19,13 @@ import json
 import hashlib
 from filelock import FileLock
 from threadpoolctl import threadpool_limits
+from pathlib import Path
 import concurrent.futures
 import multiprocessing
 from torch.utils.data import DataLoader
 import lightning as L
 from omegaconf import OmegaConf
+from torch.utils.data import Dataset, ConcatDataset
 import hydra
 from diffusion_policy.common.pytorch_util import dict_apply
 from diffusion_policy.dataset.base_dataset import BaseImageDataset, LinearNormalizer
@@ -26,8 +36,10 @@ from diffusion_policy.common.replay_buffer import ReplayBuffer
 from diffusion_policy.common.sampler import SequenceSampler, get_val_mask
 from diffusion_policy.dataset.robomimic_language_description import get_language_description, get_language_embedding
 from typing import Union
+import pickle
 from diffusion_policy.common.normalize_util import (
     robomimic_abs_action_only_normalizer_from_stat,
+    robomimic_abs_action_only_location_rotation_separate_normalizer_from_stat,
     robomimic_abs_action_only_dual_arm_normalizer_from_stat,
     get_range_normalizer_from_stat,
     get_image_range_normalizer,
@@ -35,6 +47,22 @@ from diffusion_policy.common.normalize_util import (
     array_to_stats
 )
 register_codecs()
+
+def _get_actions(dataset_path: str):
+    action_path = Path(Path(dataset_path).as_posix().removesuffix('.hdf5') + '_actions.npy')
+    if not action_path.exists():
+        raise FileNotFoundError(f'Actions file not found at {action_path}')
+    with action_path.open('rb') as f:
+        data = np.load(f)
+    return data
+
+def _get_image_features(dataset_path: str):
+    image_feature_path = Path(Path(dataset_path).as_posix().removesuffix('.hdf5') + '_features.npy')
+    if not image_feature_path.exists():
+        raise FileNotFoundError(f'Image features file not found at {image_feature_path}')
+    with image_feature_path.open('rb') as f:
+        data = np.load(f)
+    return data
 
 class RobomimicReplayImageDataset(BaseImageDataset):
     def __init__(self,
@@ -53,7 +81,7 @@ class RobomimicReplayImageDataset(BaseImageDataset):
         ):
         rotation_transformer = RotationTransformer(
             from_rep='axis_angle', to_rep=rotation_rep)
-
+        self.val_ratio = val_ratio
         replay_buffer = None
         if use_cache:
             cache_zarr_path = dataset_path + '.zarr.zip'
@@ -161,7 +189,8 @@ class RobomimicReplayImageDataset(BaseImageDataset):
                 # dual arm
                 this_normalizer = robomimic_abs_action_only_dual_arm_normalizer_from_stat(stat)
             else:
-                this_normalizer = robomimic_abs_action_only_normalizer_from_stat(stat)
+                # this_normalizer = robomimic_abs_action_only_normalizer_from_stat(stat)
+                this_normalizer = robomimic_abs_action_only_location_rotation_separate_normalizer_from_stat(stat)
             
             if self.use_legacy_normalizer:
                 this_normalizer = normalizer_from_stat(stat)
@@ -391,42 +420,161 @@ class RobomimicReplayImageLanguageDataset(RobomimicReplayImageDataset):
             use_legacy_normalizer=False,
             use_cache=False,
             seed=42,
-            val_ratio=0.0
+            val_ratio=0.0,
+            load_image_features=False
         ):
+        """
+        If load_image_features is True, load R3M features directly, ignoring images.
+        """
         super().__init__(shape_meta, dataset_path, horizon, pad_before, pad_after, n_obs_steps, abs_action, rotation_rep, use_legacy_normalizer, use_cache, seed, val_ratio)
         # self.language_description = get_language_description(dataset_path)
         self.language_embedding = get_language_embedding(dataset_path)
+        self.language_description = get_language_description(dataset_path)
+        self.load_image_features = load_image_features
+        if self.load_image_features:
+            self.image_features = _get_image_features(dataset_path)
+            self.actions = _get_actions(dataset_path)
+            assert len(self.image_features) == len(self.actions)
+            length = super().__len__() + super().get_validation_dataset().__len__()
+            assert len(self.actions) == length, f"The length of actions and the dataset should be the same: {len(self.actions)} vs {length}"
 
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
-        data = super().__getitem__(idx)
-        # data['obs']['language_description'] = self.language_description
+        if self.load_image_features:
+            data = {'obs':{}}
+            data['obs']['image_features'] = torch.from_numpy(self.image_features[idx])
+            data['action'] = torch.from_numpy(self.actions[idx])
+        else:
+            data = super().__getitem__(idx)
+
+        data['obs']['language_description'] = self.language_description
         data['obs']['language_embedding'] = self.language_embedding
-        data['obs']['image'] = data['obs']['agentview_image']
-        del data['obs']['agentview_image']
+        if not self.load_image_features:
+            data['obs']['image'] = data['obs']['agentview_image']
+            del data['obs']['agentview_image']
         return data
     
+# class MixedRobomimicReplayImageLanguageDataset(Dataset):
+#     def __init__(self, 
+#                 dataset_path:str,
+#                 include_tasks:List[str],
+#                 data_type:Literal['mh', 'ph'],
+#                 shape_meta: dict,
+#                 horizon=1,
+#                 pad_before=0,
+#                 pad_after=0,
+#                 n_obs_steps=None,
+#                 abs_action=False,
+#                 rotation_rep='rotation_6d', # ignored when abs_action=False
+#                 use_legacy_normalizer=False,
+#                 use_cache=False,
+#                 seed=42,
+#                 val_ratio=0.0):
+#         """
+#         dataset_path: path to the robomimic dataset. Should contain: task/ph/image_abs.hdf5
+#         """
+#         self.datasets = []
+#         for task in include_tasks:
+#             path = Path(dataset_path) / task / data_type / f'image{"_abs" if abs_action else ""}.hdf5'
+#             self.datasets.append(RobomimicReplayImageLanguageDataset(dataset_path=path.as_posix(), 
+#                                                                 shape_meta=shape_meta, 
+#                                                                 abs_action=abs_action, 
+#                                                                 rotation_rep=rotation_rep, 
+#                                                                 use_legacy_normalizer=use_legacy_normalizer, 
+#                                                                 use_cache=use_cache, 
+#                                                                 seed=seed, 
+#                                                                 val_ratio=val_ratio))
+#         self.dataset = ConcatDataset(self.datasets)
+#         self.train_dataset = self.dataset
+#         self.val_dataset = ConcatDataset([d.get_validation_dataset() for d in self.datasets])
+
+#     def get_normalizer(self):
+#         normalizers = [d.get_normalizer() for d in self.datasets]
+#         max_values = np.max([n.get_input_stats_dict()['max'] for n in normalizers])
+#         min_values = np.min([n.get_input_stats_dict()['min'] for n in normalizers])
+#         return robomimic_abs_action_only_location_rotation_separate_normalizer_from_stat({'max':max_values, 'min':min_values})
+
+#     def get_validation_dataset(self):
+#         return self.val_dataset
 
 class RobomimicImageDatamodule(L.LightningDataModule):
-    def __init__(self, batch_size, num_workers, dataset: Union[RobomimicReplayImageDataset, RobomimicReplayImageLanguageDataset]):
+    def __init__(self, dataset: Union[RobomimicReplayImageDataset, RobomimicReplayImageLanguageDataset],
+                 batch_size:int=128, num_workers:int=0):
         super().__init__()
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.dataset = dataset
-        self.language_description = get_language_description(dataset.dataset_path)
 
-    def prepare_data(self):
-        self.train_dataset = self.dataset
-        self.val_dataset = self.train_dataset.get_validation_dataset()
-        self.normalizer = self.train_dataset.get_normalizer()
+        if self.dataset.load_image_features:
+            dataset_size = len(self.dataset)
+            val_size = int(dataset_size * self.dataset.val_ratio)
+            train_size = dataset_size - val_size
+            self.train_dataset, self.val_dataset = torch.utils.data.random_split(
+                self.dataset, 
+                [train_size, val_size],
+            )
+        else:
+            self.train_dataset = self.dataset
+            self.val_dataset = self.dataset.get_validation_dataset()
+        self.normalizer = self.dataset.get_normalizer()
 
     def setup(self, stage: str):
         pass
 
     def train_dataloader(self):
-        return DataLoader(self.train_dataset, batch_size=self.batch_size, num_workers=self.num_workers, pin_memory=True, persistent_workers=True, shuffle=True)
+        return DataLoader(self.train_dataset, batch_size=self.batch_size, num_workers=self.num_workers, pin_memory=True, persistent_workers=True if self.num_workers > 0 else False, shuffle=True)
 
     def val_dataloader(self):
-        return DataLoader(self.val_dataset, batch_size=self.batch_size, num_workers=self.num_workers, pin_memory=True, persistent_workers=True, shuffle=False)
+        return DataLoader(self.val_dataset, batch_size=self.batch_size, num_workers=self.num_workers, pin_memory=True, persistent_workers=True if self.num_workers > 0 else False, shuffle=False)
+
+    def predict_dataloader(self):
+        return DataLoader(ConcatDataset([self.train_dataset, self.val_dataset]), batch_size=self.batch_size if self.batch_size > 1024 else 1024, num_workers=self.num_workers, shuffle=False)
+        
+
+def main():
+    dataset = MixedRobomimicReplayImageLanguageDataset(
+                "/home/zzy/robot/data/diffusion_policy_data/data/robomimic/datasets",
+                include_tasks=['lift', 'can', 'square'],
+                data_type='ph',
+                shape_meta= {
+                    'obs': {
+                        'agentview_image': {
+                            'shape': [3, 84, 84],
+                            'type': 'rgb'
+                            },
+                            'robot0_eye_in_hand_image': {
+                                'shape': [3, 84, 84],
+                                'type': 'rgb'
+                            },
+                            'robot0_eef_pos': {
+                                'shape': [3]
+                                # type default: low_dim
+                            },
+                            'robot0_eef_quat': {
+                                'shape': [4]
+                            },
+                            'robot0_gripper_qpos': {
+                                'shape': [2]
+                            }
+                        },
+                        'action': {
+                            'shape': [10]
+                        }
+                        },
+                horizon=16,
+                pad_before=0,
+                pad_after=15,
+                n_obs_steps=None,
+                abs_action=True,
+                rotation_rep='rotation_6d',
+                use_legacy_normalizer=False,
+                use_cache=False,
+                seed=42,
+                val_ratio=0.05
+                )
 
 
 
+
+
+if __name__ == '__main__':
+    main()

@@ -9,24 +9,26 @@ import torch.nn.functional as F
 from diffusers.optimization import get_cosine_schedule_with_warmup
 from diffusers.schedulers import DDPMScheduler, DDIMScheduler
 
-import lightning.pytorch as pl
-from diffusion_policy.model.common.normalizer import LinearNormalizer
+import lightning as L
+from diffusion_policy.model.common.normalizer import SingleFieldLinearNormalizer
 # from RoLD.models.common import SinusoidalPosEmb, get_pe, WrappedTransformerEncoder, WrappedTransformerDecoder, ResBottleneck, ImageAdapter
 # from RoLD.models.autoencoder.downsample_cvae import DownsampleCVAE
 from diffusion_policy.model.diffusion.cvae_rold import DownsampleCVAE, get_pe, WrappedTransformerEncoder, WrappedTransformerDecoder, ResBottleneck, ImageAdapter
 from diffusion_policy.model.diffusion.positional_embedding import SinusoidalPosEmb
 from diffusion_policy.model.vision.r3m import R3MImageEncoderWrapper
 from diffusion_policy.model.language.DistilBERT_utils import DistilBERTWrapper
-
-class DownsampleObsLDM(pl.LightningModule):
+from diffusion_policy.common.normalize_util import get_range_normalizer_from_stat
+from loguru import logger
+class DownsampleObsLDM(L.LightningModule):
     def __init__(
         self,
-        ae_path:str,
         
+        ae_path:str=None,
         hidden_size:int=256,
         horizon:int=16,
         language_feature_dim:int=768,
         image_feature_dim:int=512,
+        load_image_features:bool=True,
         low_dim_feature_dim:int=None,
         n_layers:int=6,
         n_heads:int=8,
@@ -34,9 +36,9 @@ class DownsampleObsLDM(pl.LightningModule):
 
         lr:float=1e-4,
         warmup_steps:int=1000,
-        num_training_steps:int=100000,
+        # num_training_steps:int=100000,
         use_lr_scheduler:bool=True,
-        
+
         num_inference_timesteps:int=1000,
         num_train_timesteps:int= 100,
         beta_start:float = 0.0001,
@@ -66,6 +68,7 @@ class DownsampleObsLDM(pl.LightningModule):
         # self.latent_size = latent_size
         self.horizon = horizon
         self.image_feature_dim = image_feature_dim
+        self.load_image_features = load_image_features # indicates whether to load R3M features directly
         self.language_feature_dim = language_feature_dim
         self.low_dim_feature_dim = low_dim_feature_dim
         self.n_layers = n_layers
@@ -73,7 +76,7 @@ class DownsampleObsLDM(pl.LightningModule):
         self.dropout = dropout
         self.lr = lr
         self.warmup_steps = warmup_steps
-        self.num_training_steps = num_training_steps
+        # self.num_training_steps = num_training_steps
         self.num_inference_timesteps = num_inference_timesteps
         self.num_train_timesteps = num_train_timesteps
         self.beta_start = beta_start
@@ -82,26 +85,17 @@ class DownsampleObsLDM(pl.LightningModule):
         self.variance_type = variance_type
         self.clip_sample = clip_sample
         self.prediction_type = prediction_type
+        self.use_lr_scheduler = use_lr_scheduler
         
         self.save_hyperparameters()
-        self.normalizer: LinearNormalizer = None
-        # initialize autoencoder
-        self.autoencoder = DownsampleCVAE.load_from_checkpoint(ae_path)
+        self.normalizer = SingleFieldLinearNormalizer()
+        self.autoencoder = DownsampleCVAE.load_from_checkpoint(self.ae_path).eval()
+        # freeze the autoencoder
+        for param in self.autoencoder.parameters():
+            param.requires_grad = False
+        # logger.debug(self.autoencoder.state_dict()['cls'][0, :10])
         self.latent_size = latent_size = self.autoencoder.latent_size
-        # ae_ckpt = torch.load(ae_path)
-        # ae_config = ae_ckpt['hyper_parameters']
-        # if mode == 'finetuning' and ae_config['mode'] == 'pretraining':
-        #     raise ValueError('you should load a finetuned AE during finetuning ldm')
-        # ae_config['model_kwargs']['ckpt_path'] = ae_ckpt_path
-        # autoencoder = DownsampleCVAE(**ae_config)  # init includes loading ckpt
-        # freeze autoencoder
-        # for p in autoencoder.parameters():
-        #     p.requires_grad = False
-        # del ae_ckpt
 
-        # self.hidden_size = hidden_size = model_kwargs['hidden_size'] = autoencoder.hidden_size
-        # self.latent_size = latent_size = model_kwargs['latent_size'] = autoencoder.latent_size
-        # self.horizon = horizon = model_kwargs['horizon']
 
         self.time_emb = SinusoidalPosEmb(dim=hidden_size)
         self.register_buffer(
@@ -127,124 +121,77 @@ class DownsampleObsLDM(pl.LightningModule):
             prediction_type=prediction_type
         )
 
-
-        self.image_encoder = R3MImageEncoderWrapper()
+        if not self.load_image_features:
+            self.image_encoder = R3MImageEncoderWrapper()
         self.image_emb = nn.Linear(in_features=image_feature_dim, out_features=hidden_size)
-        # self.language_encoder = DistilBERTWrapper()
         self.language_emb = nn.Linear(in_features=language_feature_dim, out_features=hidden_size)
-        # if ckpt_path is not None:
-        #     # attach obs, then load real params
-        #     # copy pretrained img_emb
-        #     if hasattr(autoencoder, 'img_emb'):
-        #         self.img_emb = copy.deepcopy(autoencoder.img_emb)
-        #     else:
-        #         self.img_emb = ResBottleneck(hidden_size=hidden_size)
-        #     for p in self.img_emb.parameters():
-        #         p.requires_grad = True
-        #     if model_kwargs.get('low_dim_feature_dim') is not None:
-        #         assert mode == 'finetuning' or mode == 'inference'
-        #         # copy pretrained low_dim_emb
-        #         if hasattr(autoencoder, 'low_dim_emb'):
-        #             self.low_dim_emb = copy.deepcopy(autoencoder.low_dim_emb)
-        #         else:
-        #             self.low_dim_emb = nn.Linear(model_kwargs['low_dim_feature_dim'], hidden_size)
-        #         for p in self.low_dim_emb.parameters():
-        #             p.requires_grad = True
-        #     else:
-        #         assert mode == 'pretraining'
-        #         self.low_dim_emb = None
-
-        #     self.load_state_dict(state_dict=ckpt['state_dict'], strict=False)  # only load the ldm part
-        #     del ckpt
-        #     print(f'WARNING: ignoring LDM config, LDM loaded from {ckpt_path}')
-        # else:
-        #     # apply init on other params
-        #     self.apply(self._init_weights)
-        #     # then attach obs 
-        #     # copy pretrained img_emb
-        #     if hasattr(autoencoder, 'img_emb'):
-        #         self.img_emb = copy.deepcopy(autoencoder.img_emb)
-        #     else:
-        #         self.img_emb = ResBottleneck(hidden_size=hidden_size)
-        #     for p in self.img_emb.parameters():
-        #         p.requires_grad = True
-        #     if model_kwargs.get('low_dim_feature_dim') is not None:
-        #         assert mode == 'finetuning' or mode == 'inference'
-        #         # copy pretrained low_dim_emb
-        #         if hasattr(autoencoder, 'low_dim_emb'):
-        #             self.low_dim_emb = copy.deepcopy(autoencoder.low_dim_emb)
-        #         else:
-        #             self.low_dim_emb = nn.Linear(model_kwargs['low_dim_feature_dim'], hidden_size)
-        #         for p in self.low_dim_emb.parameters():
-        #             p.requires_grad = True
-        #     else:
-        #         assert mode == 'pretraining'
-        #         self.low_dim_emb = None
-
-        # must attach autoencoder at last to avoid loading params in ldm ckpt or init weights
-        # self.autoencoder = autoencoder
-        # self.last_training_batch = None
+        # self.load_state_dict(torch.load("/home/zzy/robot/data/diffusion_policy_data/data/latent_diffusion_policy_ldm/2024-08-05_19-41-56/last.ckpt")['state_dict'])
         
     def configure_optimizers(self):
 
-        tuned_parameters = [p for p in self.parameters() if p.requires_grad]
+        tuned_named_parameters = [ (name, param) for name, param in self.named_parameters() if param.requires_grad and 'normalizer' not in name]
+        
+        logger.debug('\n'.join([f'{name}: {param.shape}' for name, param in tuned_named_parameters]))
 
         optimizer = torch.optim.Adam(
-            tuned_parameters,
+            [p for _, p in tuned_named_parameters],
             lr=self.lr,
         )
-        scheduler = get_cosine_schedule_with_warmup(optimizer, num_warmup_steps=self.warmup_steps, num_training_steps=self.num_training_steps)
+        if self.use_lr_scheduler:
+            scheduler = get_cosine_schedule_with_warmup(optimizer, num_warmup_steps=self.warmup_steps, num_training_steps=self.trainer.max_epochs * len(self.trainer.datamodule.train_dataloader()))
 
-        self.lr_scheduler = scheduler
-        return {
+            self.lr_scheduler = scheduler
+            return {
             'optimizer': optimizer,
             'lr_scheduler': {
                 'scheduler': scheduler,
                 'interval': 'step'
+                }
             }
-        }
+        else:
+            return optimizer
 
     # def _init_weights(self, module):
-        ignore_types = (nn.Dropout, 
-            SinusoidalPosEmb, 
-            nn.TransformerEncoderLayer, 
-            nn.TransformerDecoderLayer,
-            nn.TransformerEncoder,
-            nn.TransformerDecoder,
-            nn.ModuleList,
-            nn.Mish,
-            nn.Sequential,
-            WrappedTransformerDecoder,
-            WrappedTransformerEncoder,
-            nn.LeakyReLU,
-            ResBottleneck,
-            DownsampleObsLDM,
-            DownsampleCVAE  # double check
-        )
-        if isinstance(module, (nn.Linear, nn.Embedding)):
-            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
-            if isinstance(module, nn.Linear) and module.bias is not None:
-                torch.nn.init.zeros_(module.bias)
-        elif isinstance(module, nn.MultiheadAttention):
-            weight_names = [
-                'in_proj_weight', 'q_proj_weight', 'k_proj_weight', 'v_proj_weight']
-            for name in weight_names:
-                weight = getattr(module, name)
-                if weight is not None:
-                    torch.nn.init.normal_(weight, mean=0.0, std=0.02)
-            bias_names = ['in_proj_bias', 'bias_k', 'bias_v']
-            for name in bias_names:
-                bias = getattr(module, name)
-                if bias is not None:
-                    torch.nn.init.zeros_(bias)
-        elif isinstance(module, nn.LayerNorm):
-            torch.nn.init.zeros_(module.bias)
-            torch.nn.init.ones_(module.weight)
-        elif isinstance(module, ignore_types):
-            # no param
-            pass
-        else:
-            raise RuntimeError("Unaccounted module {}".format(module))
+        # ignore_types = (nn.Dropout, 
+        #     SinusoidalPosEmb, 
+        #     nn.TransformerEncoderLayer, 
+        #     nn.TransformerDecoderLayer,
+        #     nn.TransformerEncoder,
+        #     nn.TransformerDecoder,
+        #     nn.ModuleList,
+        #     nn.Mish,
+        #     nn.Sequential,
+        #     WrappedTransformerDecoder,
+        #     WrappedTransformerEncoder,
+        #     nn.LeakyReLU,
+        #     ResBottleneck,
+        #     DownsampleObsLDM,
+        #     DownsampleCVAE  # double check
+        # )
+        # if isinstance(module, (nn.Linear, nn.Embedding)):
+        #     torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+        #     if isinstance(module, nn.Linear) and module.bias is not None:
+        #         torch.nn.init.zeros_(module.bias)
+        # elif isinstance(module, nn.MultiheadAttention):
+        #     weight_names = [
+        #         'in_proj_weight', 'q_proj_weight', 'k_proj_weight', 'v_proj_weight']
+        #     for name in weight_names:
+        #         weight = getattr(module, name)
+        #         if weight is not None:
+        #             torch.nn.init.normal_(weight, mean=0.0, std=0.02)
+        #     bias_names = ['in_proj_bias', 'bias_k', 'bias_v']
+        #     for name in bias_names:
+        #         bias = getattr(module, name)
+        #         if bias is not None:
+        #             torch.nn.init.zeros_(bias)
+        # elif isinstance(module, nn.LayerNorm):
+        #     torch.nn.init.zeros_(module.bias)
+        #     torch.nn.init.ones_(module.weight)
+        # elif isinstance(module, ignore_types):
+        #     # no param
+        #     pass
+        # else:
+        #     raise RuntimeError("Unaccounted module {}".format(module))
 
     def pred_epsilon(self, noise, timestep, language_emb, image_emb):
         timesteps = timestep
@@ -266,14 +213,15 @@ class DownsampleObsLDM(pl.LightningModule):
         return self.language_emb(features)
 
     def get_image_emb(self, batch):
-        features = self.image_encoder(batch['obs']['image'])
+        if self.load_image_features:
+            features = batch['obs']['image_features']
+        else:
+            features = self.image_encoder(batch['obs']['image'])
         return self.image_emb(features)
 
-    def predict_action(self, batch):
-        # scheduler = DDIMScheduler.from_config(self.noise_scheduler.config)
-        # scheduler.set_timesteps(self.num_inference_timesteps)
+    def predict_action(self, batch, unnormalize_output=True):
         scheduler = self.noise_scheduler
-        batch_size = batch['obs']['image'].shape[0]
+        batch_size = len(batch['obs']['language_embedding'])
         language_emb = self.get_language_emb(batch=batch)
         image_emb = self.get_image_emb(batch=batch)
         # recover z
@@ -282,26 +230,33 @@ class DownsampleObsLDM(pl.LightningModule):
             model_output = self.pred_epsilon(
                 noise=z, timestep=t, language_emb=language_emb, image_emb=image_emb)
             z = scheduler.step(model_output, t, z).prev_sample
-        
-        _, pred_action = self.autoencoder.decode(z=z.unsqueeze(1))
-        return pred_action
+        unnormalized_z = self.normalizer.unnormalize(z)
 
-    def forward(self, batch):
+        decoding_output = self.autoencoder.decode(z=unnormalized_z, unnormalize_output=unnormalize_output)
+        return {
+                    'pred_z': z,
+                    'unnormalized_z': unnormalized_z,
+                    'pred_action': decoding_output['pred'],
+                    'unnormalized_pred_action': decoding_output['unnormalized_pred'] if unnormalize_output else None
+                }
+
+    def forward(self, batch, normalize_input=True):
         # autoencoder
-        posterior = self.autoencoder.encode(batch)
+        encoding_output = self.autoencoder.encode(batch, normalize_input=normalize_input)
         image_emb = self.get_image_emb(batch=batch)
         if self.autoencoder.sample_posterior:
-            z = posterior.sample()
+            z = encoding_output['posterior'].sample()
         else:
-            z = posterior.mode()
+            z = encoding_output['posterior'].mode()
         language_emb = self.get_language_emb(batch)
 
+        normalized_z = self.normalizer.normalize(z)
         # diffusion
-        noise = torch.randn(z.shape, device=z.device)
+        noise = torch.randn(normalized_z.shape, device=normalized_z.device)
         timesteps = torch.randint(
-            low=0, high=self.noise_scheduler.config.num_train_timesteps, size=(z.shape[0],), device=z.device
+            low=0, high=self.noise_scheduler.config.num_train_timesteps, size=(normalized_z.shape[0],), device=normalized_z.device
         ).long()
-        noisy_latent = self.noise_scheduler.add_noise(z, noise, timesteps)
+        noisy_latent = self.noise_scheduler.add_noise(normalized_z, noise, timesteps)
  
         pred = self.pred_epsilon(
             noise = noisy_latent,
@@ -311,31 +266,33 @@ class DownsampleObsLDM(pl.LightningModule):
         )
         denoise_loss = F.mse_loss(noise, pred)
 
-        return denoise_loss
+        return {'denoise_loss': denoise_loss, 
+                'z': z,
+                'normalized_z': normalized_z, 
+                'posterior': encoding_output['posterior'], 
+                'normalized_action': encoding_output['normalized_action'],}
 
     def training_step(self, batch, batch_idx):
-        forward_results = self.forward(batch=batch)
-        self.log('train/denoise_loss', forward_results, sync_dist=True)
-        return forward_results
-
-    # def on_train_epoch_end(self) -> None:
-    #     with torch.no_grad():
-    #         batch = self.last_training_batch
-    #         raw_action = batch['action']
-    #         pred_action = self.predict_action(
-    #             raw_language_features=batch['language'],
-    #             raw_image_features=batch['image'],
-    #             raw_low_dim_data=batch.get('low_dim')
-    #         )
-    #         model_mse_error = F.mse_loss(raw_action, pred_action)
-    #         self.log('train/model_mse_error', model_mse_error, sync_dist=True)
+        forward_output = self.forward(batch=batch, normalize_input=True)
+        self.log('train/denoise_loss', forward_output['denoise_loss'], sync_dist=True, prog_bar=True)
+        self.log('trainer/lr', self.optimizers().param_groups[0]['lr'], sync_dist=True)
+        return forward_output['denoise_loss']
 
     def validation_step(self, batch, batch_idx):
-        forward_results = self.forward(batch=batch)
-        self.log('val/denoise_loss', forward_results, sync_dist=True, batch_size=batch['obs']['image'].shape[0])
-
+        forward_output = self.forward(batch=batch, normalize_input=True)
+        self.log('val/denoise_loss', forward_output['denoise_loss'], sync_dist=True, batch_size=batch['action'].shape[0]) # one step normalized z loss
         raw_action = batch['action']
-        pred_action = self.predict_action(batch=batch)
-        model_mse_error = F.mse_loss(raw_action, pred_action)
-        self.log('val/model_mse_error', model_mse_error, sync_dist=True, batch_size=batch['obs']['image'].shape[0])
-        return forward_results
+        pred_output = self.predict_action(batch=batch, unnormalize_output=True)
+        self.log('val/normalized_z_mse',        F.mse_loss(forward_output['normalized_z'], pred_output['pred_z']),              sync_dist=True, batch_size=batch['action'].shape[0]) # multi step normalized z loss
+        self.log('val/unnormalized_z_mse',      F.mse_loss(forward_output['z'], pred_output['unnormalized_z']),                 sync_dist=True, batch_size=batch['action'].shape[0]) # unnormalized z loss
+        self.log('val/normalized_action_mse',   F.mse_loss(forward_output['normalized_action'], pred_output['pred_action']),    sync_dist=True, batch_size=batch['action'].shape[0]) # normalized action loss
+        self.log('val/unnormalized_action_mse', F.mse_loss(raw_action, pred_output['unnormalized_pred_action']),                sync_dist=True, batch_size=batch['action'].shape[0]) # unnormalized action loss
+        ae_forward_output = self.autoencoder.forward(batch=batch, normalize_input=True)
+        self.log('val/ae_rec_loss', ae_forward_output['rec_loss'], sync_dist=True, batch_size=batch['action'].shape[0]) # autoencoder reconstruction loss
+        return forward_output
+
+    def set_normalizer(self, datamodule):
+        outputs = L.Trainer().predict(self.autoencoder, datamodule=datamodule)
+        z = torch.cat([output['z'] for output in outputs], dim=0)
+        stat = {'max': z.max(dim=0)[0], 'min': z.min(dim=0)[0]}
+        self.normalizer = get_range_normalizer_from_stat(stat=stat)

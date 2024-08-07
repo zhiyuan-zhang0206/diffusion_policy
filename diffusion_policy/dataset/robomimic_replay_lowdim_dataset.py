@@ -15,6 +15,7 @@ from diffusion_policy.common.sampler import (
     SequenceSampler, get_val_mask, downsample_mask)
 from diffusion_policy.common.normalize_util import (
     robomimic_abs_action_only_normalizer_from_stat,
+    robomimic_abs_action_only_location_rotation_separate_normalizer_from_stat,
     robomimic_abs_action_only_dual_arm_normalizer_from_stat,
     get_identity_normalizer_from_stat,
     array_to_stats
@@ -103,7 +104,8 @@ class RobomimicReplayLowdimDataset(BaseLowdimDataset):
                 # dual arm
                 this_normalizer = robomimic_abs_action_only_dual_arm_normalizer_from_stat(stat)
             else:
-                this_normalizer = robomimic_abs_action_only_normalizer_from_stat(stat)
+                # this_normalizer = robomimic_abs_action_only_normalizer_from_stat(stat)
+                this_normalizer = robomimic_abs_action_only_location_rotation_separate_normalizer_from_stat(stat)
             
             if self.use_legacy_normalizer:
                 this_normalizer = normalizer_from_stat(stat)
@@ -170,7 +172,7 @@ def _data_to_obs(raw_obs, raw_actions, obs_keys, abs_action, rotation_transforme
     return data
 
 class RobomimicLowdimDatamodule(L.LightningDataModule):
-    def __init__(self, batch_size, num_workers, dataset: RobomimicReplayLowdimDataset):
+    def __init__(self,dataset: RobomimicReplayLowdimDataset, batch_size:int=128, num_workers:int=0):
         super().__init__()
         self.batch_size = batch_size
         self.num_workers = num_workers
@@ -185,10 +187,10 @@ class RobomimicLowdimDatamodule(L.LightningDataModule):
         pass
 
     def train_dataloader(self):
-        return DataLoader(self.train_dataset, batch_size=self.batch_size, num_workers=self.num_workers, pin_memory=True if self.num_workers!=0 else False)
+        return DataLoader(self.train_dataset, batch_size=self.batch_size, num_workers=self.num_workers, pin_memory=True if self.num_workers!=0 else False, persistent_workers=True)
 
     def val_dataloader(self):
-        return DataLoader(self.val_dataset, batch_size=self.batch_size, num_workers=self.num_workers, pin_memory=True if self.num_workers!=0 else False)
+        return DataLoader(self.val_dataset, batch_size=self.batch_size, num_workers=self.num_workers, pin_memory=True if self.num_workers!=0 else False, persistent_workers=True)
 
     def predict_dataloader(self):
         return DataLoader(self.dataset, batch_size=self.batch_size, num_workers=self.num_workers, pin_memory=True if self.num_workers!=0 else False)

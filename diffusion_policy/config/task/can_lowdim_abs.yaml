@@ -1,17 +1,34 @@
 name: can_lowdim
-
-obs_dim: 23
+shape_meta: &shape_meta
+  # acceptable types: rgb, low_dim
+  obs:
+    agentview_image:
+      shape: [3, 84, 84]
+      type: rgb
+    # robot0_eye_in_hand_image:
+    #   shape: [3, 84, 84]
+    #   type: rgb
+    robot0_eef_pos:
+      shape: [3]
+      # type default: low_dim
+    robot0_eef_quat:
+      shape: [4]
+    robot0_gripper_qpos:
+      shape: [2]
+  action: 
+    shape: [10]
+obs_dim: 19
 action_dim: 10
 keypoint_dim: 3
 
 obs_keys: &obs_keys ['object', 'robot0_eef_pos', 'robot0_eef_quat', 'robot0_gripper_qpos']
 task_name: &task_name can
 dataset_type: &dataset_type ph
-dataset_path: &dataset_path data/robomimic/datasets/${task.task_name}/${task.dataset_type}/low_dim_abs.hdf5
+dataset_path: &dataset_path ${oc.env:DATA_ROOT}/robomimic/datasets/${task.task_name}/${task.dataset_type}/low_dim_abs.hdf5
 abs_action: &abs_action True
 
 env_runner:
-  _target_: diffusion_policy.env_runner.robomimic_lowdim_runner.RobomimicLowdimRunner
+  _target_: diffusion_policy.env_runner.robomimic_image_runner_ae.RobomimicImageRunnerAE
   dataset_path: *dataset_path
   obs_keys: *obs_keys
   n_train: 6

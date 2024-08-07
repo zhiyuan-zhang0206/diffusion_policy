@@ -22,7 +22,8 @@ from diffusion_policy.workspace.base_workspace import BaseWorkspace
 @click.option('-c', '--checkpoint', required=True)
 @click.option('-o', '--output_dir', required=True)
 @click.option('-d', '--device', default='cuda:0')
-def main(checkpoint, output_dir, device):
+@click.option('-n', '--n_action_steps', default=None)
+def main(checkpoint, output_dir, device, n_action_steps):
     if os.path.exists(output_dir) and not zzy_utils.check_environ_debug():
         click.confirm(f"Output path {output_dir} already exists! Overwrite?", abort=True)
     pathlib.Path(output_dir).mkdir(parents=True, exist_ok=True)
@@ -46,17 +47,29 @@ def main(checkpoint, output_dir, device):
     
     # run eval
     if zzy_utils.check_environ_debug():
-        cfg.task.env_runner['n_test'] = 0
-        cfg.task.env_runner['n_envs'] = 1
-        cfg.task.env_runner['n_test_vis'] = 1
-        cfg.task.env_runner['n_train'] = 1
-        cfg.task.env_runner['n_train_vis'] = 1
-        cfg.task.env_runner['max_steps'] = 64
+        cfg.task.env_runner['n_test'] = 50
+        cfg.task.env_runner['n_envs'] = 5
+        cfg.task.env_runner['n_test_vis'] = cfg.task.env_runner['n_test']
+        cfg.task.env_runner['n_train'] = 0
+        cfg.task.env_runner['n_train_vis'] = 0
+        cfg.task.env_runner['max_steps'] = 128
+        if hasattr(cfg, 'test_ae_only') and cfg.test_ae_only:
+            cfg.task.env_runner['n_test'] = 0
+            cfg.task.env_runner['n_envs'] = 1
+            cfg.task.env_runner['n_test_vis'] = 0
+            cfg.task.env_runner['n_train'] = 1
+            cfg.task.env_runner['n_train_vis'] = 1
     env_runner = hydra.utils.instantiate(
         cfg.task.env_runner,
         output_dir=output_dir)
     if hasattr(cfg, 'test_ae_only') and cfg.test_ae_only:
         env_runner.load_replay_buffer(workspace)
+        cfg.task.env_runner['n_test'] = 0
+        cfg.task.env_runner['n_envs'] = 1
+        cfg.task.env_runner['n_test_vis'] = 0
+        cfg.task.env_runner['n_train'] = 1
+        cfg.task.env_runner['n_train_vis'] = 1
+    env_runner.set_action_steps(n_action_steps)
     runner_log = env_runner.run(policy)
     
     # dump log to json

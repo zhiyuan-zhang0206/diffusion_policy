@@ -14,7 +14,7 @@ from diffusion_policy.gym_util.sync_vector_env import SyncVectorEnv
 from diffusion_policy.gym_util.multistep_wrapper import MultiStepWrapper
 from diffusion_policy.gym_util.video_recording_wrapper import VideoRecordingWrapper, VideoRecorder
 from diffusion_policy.model.common.rotation_transformer import RotationTransformer
-
+from diffusion_policy.dataset.robomimic_language_description import get_language_description, get_language_embedding
 from diffusion_policy.policy.base_image_policy import BaseImagePolicy
 from diffusion_policy.common.pytorch_util import dict_apply
 from diffusion_policy.env_runner.base_image_runner import BaseImageRunner
@@ -192,13 +192,15 @@ class RobomimicImageRunner(BaseImageRunner):
                 env_prefixs.append('train/')
                 env_init_fn_dills.append(dill.dumps(init_fn))
             
+            self.dataset_path = dataset_path
+            self.language_description = get_language_description(dataset_path)
+            self.language_embedding = get_language_embedding(dataset_path)
             # if zzy_utils.check_environ_debug():
-            #     self.dataset_path = dataset_path
             #     self.data_states = [f[f'data/demo_{i}/states'][()] for i in range(n_train)]
-        if zzy_utils.check_environ_debug():
-            d = {'_target_': 'diffusion_policy.dataset.robomimic_replay_image_dataset.RobomimicReplayImageDataset', 'shape_meta': {'obs': {'agentview_image': {'shape': [3, 84, 84], 'type': 'rgb'}, 'robot0_eye_in_hand_image': {'shape': [3, 84, 84], 'type': 'rgb'}, 'robot0_eef_pos': {'shape': [3]}, 'robot0_eef_quat': {'shape': [4]}, 'robot0_gripper_qpos': {'shape': [2]}}, 'action': {'shape': [7]}}, 'dataset_path': 'data/robomimic/datasets/lift/ph/image.hdf5', 'horizon': 10, 'pad_before': 0, 'pad_after': 0, 'n_obs_steps': 10, 'abs_action': False, 'rotation_rep': 'rotation_6d', 'use_legacy_normalizer': False, 'use_cache': True, 'seed': 42, 'val_ratio': 0.02}
-            import hydra
-            self.dataset = hydra.utils.instantiate(d)
+        # if zzy_utils.check_environ_debug():
+        #     d = {'_target_': 'diffusion_policy.dataset.robomimic_replay_image_dataset.RobomimicReplayImageDataset', 'shape_meta': {'obs': {'agentview_image': {'shape': [3, 84, 84], 'type': 'rgb'}, 'robot0_eye_in_hand_image': {'shape': [3, 84, 84], 'type': 'rgb'}, 'robot0_eef_pos': {'shape': [3]}, 'robot0_eef_quat': {'shape': [4]}, 'robot0_gripper_qpos': {'shape': [2]}}, 'action': {'shape': [7]}}, 'dataset_path': 'data/robomimic/datasets/lift/ph/image.hdf5', 'horizon': 10, 'pad_before': 0, 'pad_after': 0, 'n_obs_steps': 10, 'abs_action': False, 'rotation_rep': 'rotation_6d', 'use_legacy_normalizer': False, 'use_cache': True, 'seed': 42, 'val_ratio': 0.02}
+        #     import hydra
+        #     self.dataset = hydra.utils.instantiate(d)
 
         # test
         for i in range(n_test):
@@ -319,7 +321,7 @@ class RobomimicImageRunner(BaseImageRunner):
                     # TODO: not tested
                     np_obs_dict['past_action'] = past_action[
                         :,-(self.n_obs_steps-1):].astype(np.float32)
-                
+                np_obs_dict['language_embedding'] = self.language_embedding
                 # device transfer
                 obs_dict = dict_apply(np_obs_dict, 
                     lambda x: torch.from_numpy(x).to(
@@ -333,7 +335,7 @@ class RobomimicImageRunner(BaseImageRunner):
                 np_action_dict = dict_apply(action_dict,
                     lambda x: x.detach().to('cpu').numpy())
 
-                action = np_action_dict['action']
+                action = np_action_dict['action'][:, :8, :]
                 if not np.all(np.isfinite(action)):
                     print(action)
                     raise RuntimeError("Nan or Inf action")
@@ -345,13 +347,16 @@ class RobomimicImageRunner(BaseImageRunner):
 
                 if zzy_utils.check_environ_debug():
                     pass
-                    env_action = self.env_actions.pop(0)
+                    # env_action = self.env_actions.pop(0)
                 obs, reward, done, info = env.step(env_action)
                 done = np.all(done)
                 past_action = action
 
                 # update pbar
+                import time
+                print(action.shape)
                 pbar.update(action.shape[1])
+                time.sleep(0.5)
             pbar.close()
 
             # collect data for this round

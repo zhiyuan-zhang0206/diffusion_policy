@@ -98,7 +98,7 @@ class RobomimicImageRunnerAE(BaseImageRunner):
 
         if n_envs is None:
             n_envs = n_train + n_test
-
+        self.task_name = '_'.join(dataset_path.split('/')[-3:-1])
         # assert n_obs_steps <= n_action_steps
         dataset_path = os.path.expanduser(dataset_path)
         self.language_description = get_language_description(dataset_path)
@@ -205,7 +205,7 @@ class RobomimicImageRunnerAE(BaseImageRunner):
                     env.env.file_path = None
                     if enable_render:
                         filename = pathlib.Path(output_dir).joinpath(
-                            'media', wv.util.generate_id() + ".mp4")
+                            'media', str(i) + '_train_' + wv.util.generate_id() + ".mp4")
                         filename.parent.mkdir(parents=False, exist_ok=True)
                         filename = str(filename)
                         env.env.file_path = filename
@@ -232,7 +232,7 @@ class RobomimicImageRunnerAE(BaseImageRunner):
                 env.env.file_path = None
                 if enable_render:
                     filename = pathlib.Path(output_dir).joinpath(
-                        'media', wv.util.generate_id() + ".mp4")
+                        'media', str(i) + '_test_' + wv.util.generate_id() + ".mp4")
                     filename.parent.mkdir(parents=False, exist_ok=True)
                     filename = str(filename)
                     env.env.file_path = filename
@@ -249,7 +249,11 @@ class RobomimicImageRunnerAE(BaseImageRunner):
         env = AsyncVectorEnv(env_fns, dummy_env_fn=dummy_env_fn)
         # env = SyncVectorEnv(env_fns)
 
-
+        self.n_train = n_train
+        self.n_test = n_test
+        self.n_train_vis = n_train_vis
+        self.n_test_vis = n_test_vis
+        self.n_envs = n_envs
         self.env_meta = env_meta
         self.env = env
         self.env_fns = env_fns
@@ -272,10 +276,11 @@ class RobomimicImageRunnerAE(BaseImageRunner):
 
     def set_action_steps(self, n_action_steps):
         if n_action_steps is not None:
-            self.n_action_steps = n_action_steps
+            self.n_action_steps = int(n_action_steps)
 
-    def run(self, policy: BaseImagePolicy):
+    def run(self, policy: BaseImagePolicy, verbose=False):
         device = policy.device
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         dtype = policy.dtype
         env = self.env
         self.horizon = policy.pl_model.horizon
@@ -298,6 +303,7 @@ class RobomimicImageRunnerAE(BaseImageRunner):
         all_rewards = [None] * n_inits
 
         for chunk_idx in range(n_chunks):
+            # logger.debug(f'chunk_idx: {chunk_idx}')
             start = chunk_idx * n_envs
             end = min(n_inits, start + n_envs)
             this_global_slice = slice(start, end)
@@ -323,21 +329,23 @@ class RobomimicImageRunnerAE(BaseImageRunner):
             pbar = tqdm.tqdm(total=self.max_steps, desc=f"Eval {env_name}Image {chunk_idx+1}/{n_chunks}", 
                 leave=False, mininterval=self.tqdm_interval_sec)
             
-            # self.n_action_steps = 1
-            # temp_action_path = Path(__file__).parent.joinpath('env_actions.pkl')
-            # if temp_action_path.exists():
-            #     with temp_action_path.open('rb') as f:
-            #         self.env_actions = pickle.load(f)
-            # else:
             if hasattr(self, 'replay_buffer'):
-                self.env_actions = self.replay_buffer['action'][:self.replay_buffer.episode_ends[0]]
-                tail = [self.env_actions[-1]] * (self.horizon * 3 - 1)
-                self.env_actions = np.concatenate([self.env_actions, tail])
-                with Path(__file__).parent.joinpath('env_actions.pkl').open('wb') as f:
-                    pickle.dump(self.env_actions, f)
+                chunk_actions = []
+                for i in range(self.n_envs):
+                    if chunk_idx == 0 and i == 0:
+                        start = 0
+                    else:
+                        start = self.replay_buffer.episode_ends[chunk_idx * self.n_envs + i - 1]
+                    end = self.replay_buffer.episode_ends[chunk_idx * self.n_envs + i]
+                    actions = self.replay_buffer['action'][start:end]
+                    tail = [actions[-1]] * (self.horizon * 3 - 1)
+                    actions = np.concatenate([actions, tail])
+                    chunk_actions.append(actions)
+                max_length = max( max([len(actions) for actions in chunk_actions]) + 1, self.max_steps)
+                chunk_actions = [np.concatenate([actions, np.array([actions[-1]] * (max_length - len(actions)))]) for actions in chunk_actions]
+                chunk_actions = np.stack(chunk_actions)
 
-                env_actions_array = self.env_actions
-                self.env_actions = [env_actions_array[i * self.n_action_steps : i * self.n_action_steps +self.horizon][np.newaxis] for i in range(len(env_actions_array)//self.n_action_steps)]
+                self.env_actions = [chunk_actions[:, i * self.n_action_steps : i * self.n_action_steps +self.horizon] for i in range(len(chunk_actions[0])//self.n_action_steps)]
             else:
                 self.env_actions = [np.zeros((1, 10))] * 1000
 
@@ -345,6 +353,7 @@ class RobomimicImageRunnerAE(BaseImageRunner):
             index = -1
             while not done:
                 index += 1
+                # logger.debug(f'index: {index}')
                 # create obs dict
                 obs['language_embedding'] = self.language_embedding
                 np_obs_dict = dict(obs)
@@ -353,50 +362,38 @@ class RobomimicImageRunnerAE(BaseImageRunner):
                 #     np_obs_dict['past_action'] = past_action[
                 #         :,-(self.n_obs_steps-1):].astype(np.float32)
                 
-                # device transfer
                 data_action = self.env_actions[index]
                 np_obs_dict['action'] = data_action
                 obs_dict = dict_apply(np_obs_dict, 
                     lambda x: torch.from_numpy(x).to(
                         device=device))
 
-                # obs_dict['action'][:, :, :3] += torch.randn_like(obs_dict['action'][:, :, :3]) * 0.17
-                # run policy
                 with torch.no_grad():
                     action_dict = policy.predict_action(obs_dict)
 
-                # device_transfer
                 np_action_dict = dict_apply(action_dict,
                     lambda x: x.detach().to('cpu').numpy(), True)
-                # data_action = data_action[:, :self.n_action_steps, :]
+                
                 action = np_action_dict['action'][:, :self.n_action_steps, :]
-                # print(torch.nn.functional.mse_loss(torch.tensor(data_action), torch.tensor(action)).numpy())
-                # action = data_action
-                # print(np_action_dict['rec_loss_unnormalized'])
-                # print(np_action_dict['rec_loss'], '\n')
+
                 if not np.all(np.isfinite(action)):
                     print(action)
                     raise RuntimeError("Nan or Inf action")
                 
-                # step env
-                # env_action = action
                 if self.abs_action:
                     env_action = self.undo_transform_action(action)
 
                 obs, reward, done, info = env.step(env_action)
                 done = np.all(done)
-                # past_action = action
 
-                # update pbar
                 pbar.update(action.shape[1])
             pbar.close()
 
-            # collect data for this round
             all_video_paths[this_global_slice] = env.render()[this_local_slice]
             all_rewards[this_global_slice] = env.call('get_attr', 'reward')[this_local_slice]
-        # clear out video buffer
+
         _ = env.reset()
-        env.close()
+        # env.close()
         # log
         max_rewards = collections.defaultdict(list)
         log_data = dict()
@@ -426,9 +423,19 @@ class RobomimicImageRunnerAE(BaseImageRunner):
             name = prefix+'mean_score'
             value = np.mean(value)
             log_data[name] = value
-        logger.info(log_data)
-        logger.info(f'test mean score: {log_data["test/mean_score"]}')
+        # logger.info(log_data)
+        if verbose:
+            logger.info(f'train mean score: {compute_train_mean_score(log_data)}')
+            logger.info(f'failed train: {format_log_data(log_data)}')
+            if "test/mean_score" in log_data:
+                logger.info(f'test mean score: {log_data["test/mean_score"]}')
+            else:
+                logger.info(f'test mean score: None')
         return log_data
+
+    def close(self):
+        self.env.close()
+        return
 
     def undo_transform_action(self, action):
         raw_shape = action.shape
@@ -450,3 +457,22 @@ class RobomimicImageRunnerAE(BaseImageRunner):
             uaction = uaction.reshape(*raw_shape[:-1], 14)
 
         return uaction
+
+def compute_train_mean_score(log_data):
+    scores = []
+    for key, value in log_data.items():
+        if 'train' in key and 'max_reward' in key:
+            scores.append(value)
+    if len(scores) == 0:
+        return 
+    else:
+        return np.mean(scores)
+    
+def format_log_data(log_data):
+    # exam train video that's not successful
+    formatted = {}
+    for key, value in log_data.items():
+        if 'train' in key and 'max_reward' in key:
+            if value < 0.9:
+                formatted[key] = value
+    return formatted

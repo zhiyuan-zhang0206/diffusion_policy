@@ -8,7 +8,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from diffusers.optimization import get_cosine_schedule_with_warmup
 from diffusers.schedulers import DDPMScheduler, DDIMScheduler
-
+import zzy_utils
 import lightning as L
 from diffusion_policy.model.common.normalizer import SingleFieldLinearNormalizer
 # from RoLD.models.common import SinusoidalPosEmb, get_pe, WrappedTransformerEncoder, WrappedTransformerDecoder, ResBottleneck, ImageAdapter
@@ -23,7 +23,7 @@ class DownsampleObsLDM(L.LightningModule):
     def __init__(
         self,
         
-        ae_path:str=None,
+        latent_size:int=256,
         hidden_size:int=256,
         horizon:int=16,
         language_feature_dim:int=768,
@@ -40,30 +40,20 @@ class DownsampleObsLDM(L.LightningModule):
         use_lr_scheduler:bool=True,
 
         num_inference_timesteps:int=1000,
-        num_train_timesteps:int= 100,
+        num_train_timesteps:int= 1000,
         beta_start:float = 0.0001,
         beta_end:float = 0.02,
         beta_schedule: str = "squaredcos_cap_v2",
         variance_type: str = "fixed_small", # 
         clip_sample: bool = True, # required when predict_epsilon=False
         prediction_type: str = "epsilon",
-        # mode,
-        # all_config=None
+        
+        task_name:str=None,
+        no_normalizer:bool=True,
     ) -> None:
         super().__init__()
-        # three modes: pretraining, finetuning, inference
-
-        # ckpt_path = model_kwargs.ckpt_path
-        # if ckpt_path is not None:
-        #     assert mode == 'finetuning' or mode == 'inference'
-        #     ckpt = torch.load(ckpt_path)
-        #     hyper_params = copy.deepcopy(ckpt['hyper_parameters'])
-        #     low_dim_feature_dim = model_kwargs.low_dim_feature_dim
-        #     model_kwargs = hyper_params['model_kwargs']
-        #     model_kwargs.low_dim_feature_dim = low_dim_feature_dim
 
         # initialize model
-        self.ae_path = ae_path
         self.hidden_size = hidden_size
         # self.latent_size = latent_size
         self.horizon = horizon
@@ -86,15 +76,12 @@ class DownsampleObsLDM(L.LightningModule):
         self.clip_sample = clip_sample
         self.prediction_type = prediction_type
         self.use_lr_scheduler = use_lr_scheduler
-        
+
+        self.task_name = task_name
+        self.no_normalizer = no_normalizer
         self.save_hyperparameters()
         self.normalizer = SingleFieldLinearNormalizer()
-        self.autoencoder = DownsampleCVAE.load_from_checkpoint(self.ae_path).eval()
-        # freeze the autoencoder
-        for param in self.autoencoder.parameters():
-            param.requires_grad = False
-        # logger.debug(self.autoencoder.state_dict()['cls'][0, :10])
-        self.latent_size = latent_size = self.autoencoder.latent_size
+        
 
 
         self.time_emb = SinusoidalPosEmb(dim=hidden_size)
@@ -102,14 +89,15 @@ class DownsampleObsLDM(L.LightningModule):
             'pe', get_pe(hidden_size=hidden_size, max_len=horizon*2)
         )
 
-        self.z_up = nn.Linear(latent_size, hidden_size)
+        self.latent_size = latent_size
+        self.z_up = nn.Linear(self.latent_size, self.hidden_size)
         self.denoiser = WrappedTransformerEncoder(
-            hidden_size=hidden_size,
-            n_layers=n_layers,
-            n_heads=n_heads,
-            dropout=dropout,
+            hidden_size=self.hidden_size,
+            n_layers=self.n_layers,
+            n_heads=self.n_heads,
+            dropout=self.dropout,
         )
-        self.z_down = nn.Linear(hidden_size, latent_size)
+        self.z_down = nn.Linear(self.hidden_size, self.latent_size)
 
         self.noise_scheduler = DDPMScheduler(
             num_train_timesteps=num_train_timesteps,
@@ -126,7 +114,22 @@ class DownsampleObsLDM(L.LightningModule):
         self.image_emb = nn.Linear(in_features=image_feature_dim, out_features=hidden_size)
         self.language_emb = nn.Linear(in_features=language_feature_dim, out_features=hidden_size)
         # self.load_state_dict(torch.load("/home/zzy/robot/data/diffusion_policy_data/data/latent_diffusion_policy_ldm/2024-08-05_19-41-56/last.ckpt")['state_dict'])
-        
+
+    def load_ae(self, ae: DownsampleCVAE):
+        self.autoencoder = ae.eval()
+        for param in self.autoencoder.parameters():
+            param.requires_grad = False
+        if self.latent_size != self.autoencoder.latent_size:
+            self.latent_size = self.autoencoder.latent_size
+            self.z_up = nn.Linear(self.latent_size, self.hidden_size)
+            self.denoiser = WrappedTransformerEncoder(
+                hidden_size=self.hidden_size,
+                n_layers=self.n_layers,
+                n_heads=self.n_heads,
+                dropout=self.dropout,
+            )
+            self.z_down = nn.Linear(self.hidden_size, self.latent_size)
+
     def configure_optimizers(self):
 
         tuned_named_parameters = [ (name, param) for name, param in self.named_parameters() if param.requires_grad and 'normalizer' not in name]
@@ -138,7 +141,13 @@ class DownsampleObsLDM(L.LightningModule):
             lr=self.lr,
         )
         if self.use_lr_scheduler:
-            scheduler = get_cosine_schedule_with_warmup(optimizer, num_warmup_steps=self.warmup_steps, num_training_steps=self.trainer.max_epochs * len(self.trainer.datamodule.train_dataloader()))
+            if self.trainer.max_epochs is None or self.trainer.max_epochs == -1:
+                num_training_steps = self.trainer.max_steps
+            else:
+                num_training_steps = self.trainer.max_epochs * len(self.trainer.datamodule.train_dataloader())
+            scheduler = get_cosine_schedule_with_warmup(optimizer, 
+                                        num_warmup_steps=self.warmup_steps, 
+                                        num_training_steps=num_training_steps)
 
             self.lr_scheduler = scheduler
             return {
@@ -281,18 +290,26 @@ class DownsampleObsLDM(L.LightningModule):
     def validation_step(self, batch, batch_idx):
         forward_output = self.forward(batch=batch, normalize_input=True)
         self.log('val/denoise_loss', forward_output['denoise_loss'], sync_dist=True, batch_size=batch['action'].shape[0]) # one step normalized z loss
-        raw_action = batch['action']
+        
         pred_output = self.predict_action(batch=batch, unnormalize_output=True)
         self.log('val/normalized_z_mse',        F.mse_loss(forward_output['normalized_z'], pred_output['pred_z']),              sync_dist=True, batch_size=batch['action'].shape[0]) # multi step normalized z loss
         self.log('val/unnormalized_z_mse',      F.mse_loss(forward_output['z'], pred_output['unnormalized_z']),                 sync_dist=True, batch_size=batch['action'].shape[0]) # unnormalized z loss
         self.log('val/normalized_action_mse',   F.mse_loss(forward_output['normalized_action'], pred_output['pred_action']),    sync_dist=True, batch_size=batch['action'].shape[0]) # normalized action loss
-        self.log('val/unnormalized_action_mse', F.mse_loss(raw_action, pred_output['unnormalized_pred_action']),                sync_dist=True, batch_size=batch['action'].shape[0]) # unnormalized action loss
+        self.log('val/unnormalized_action_mse', F.mse_loss(batch['action'], pred_output['unnormalized_pred_action']),                sync_dist=True, batch_size=batch['action'].shape[0]) # unnormalized action loss
         ae_forward_output = self.autoencoder.forward(batch=batch, normalize_input=True)
         self.log('val/ae_rec_loss', ae_forward_output['rec_loss'], sync_dist=True, batch_size=batch['action'].shape[0]) # autoencoder reconstruction loss
         return forward_output
 
     def set_normalizer(self, datamodule):
+        if zzy_utils.check_environ_dry_run():
+            self.autoencoder.eval()
+            for batch in datamodule.train_dataloader():
+                output = self.autoencoder.forward(batch=batch, normalize_input=True)
+                stat = {'max': output['z'].max(dim=0)[0], 'min': output['z'].min(dim=0)[0]}
+                self.normalizer = get_range_normalizer_from_stat(stat=stat)
+                return
         outputs = L.Trainer().predict(self.autoencoder, datamodule=datamodule)
         z = torch.cat([output['z'] for output in outputs], dim=0)
         stat = {'max': z.max(dim=0)[0], 'min': z.min(dim=0)[0]}
         self.normalizer = get_range_normalizer_from_stat(stat=stat)
+        

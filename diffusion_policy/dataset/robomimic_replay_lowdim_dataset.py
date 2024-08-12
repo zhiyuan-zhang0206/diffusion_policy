@@ -178,7 +178,6 @@ class RobomimicLowdimDatamodule(L.LightningDataModule):
         self.num_workers = num_workers
         self.dataset = dataset
 
-    def prepare_data(self):
         self.train_dataset = self.dataset
         self.val_dataset = self.train_dataset.get_validation_dataset()
         self.normalizer = self.train_dataset.get_normalizer()
@@ -187,10 +186,64 @@ class RobomimicLowdimDatamodule(L.LightningDataModule):
         pass
 
     def train_dataloader(self):
-        return DataLoader(self.train_dataset, batch_size=self.batch_size, num_workers=self.num_workers, pin_memory=True if self.num_workers!=0 else False, persistent_workers=True)
+        return DataLoader(self.train_dataset, batch_size=self.batch_size, num_workers=self.num_workers, pin_memory=True , persistent_workers=True if self.num_workers!=0 else False)
 
     def val_dataloader(self):
-        return DataLoader(self.val_dataset, batch_size=self.batch_size, num_workers=self.num_workers, pin_memory=True if self.num_workers!=0 else False, persistent_workers=True)
+        return DataLoader(self.val_dataset, batch_size=self.batch_size, num_workers=self.num_workers, pin_memory=True , persistent_workers=True if self.num_workers!=0 else False)
 
     def predict_dataloader(self):
         return DataLoader(self.dataset, batch_size=self.batch_size, num_workers=self.num_workers, pin_memory=True if self.num_workers!=0 else False)
+    
+
+class MixedRobomimicReplayLowdimDataset:
+    def __init__(self, datasets: List[RobomimicReplayLowdimDataset]):
+        self.datasets = datasets
+        self.normalizers = [dataset.get_normalizer() for dataset in datasets]
+        data_index_to_dataset_index = []
+        for i, dataset in enumerate(datasets):
+            data_index_to_dataset_index.extend([i] * len(dataset))
+        self.data_index_to_dataset_index = np.array(data_index_to_dataset_index, dtype=np.int32)
+        
+        dataset_lengths = np.array([len(dataset) for dataset in datasets])
+        self.dataset_start_indices = [0] + np.cumsum(dataset_lengths).tolist()[:-1]
+        
+        self.length = sum([len(dataset) for dataset in datasets])
+
+    def get_validation_dataset(self):
+        return MixedRobomimicReplayLowdimDataset([dataset.get_validation_dataset() for dataset in self.datasets])
+
+    def __len__(self):
+        return self.length
+    
+    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+        dataset_index = self.data_index_to_dataset_index[idx]
+        normalizer = self.normalizers[dataset_index]
+        data = self.datasets[int(dataset_index)][idx - self.dataset_start_indices[dataset_index]]
+        data['normalized_action'] = normalizer['action'].normalize(data['action'])
+        return data
+    
+    def get_normalizer(self):
+        return LinearNormalizer()
+    
+class MixedRobomimicLowdimDatamodule(L.LightningDataModule):
+    def __init__(self,dataset: MixedRobomimicReplayLowdimDataset, batch_size:int=128, num_workers:int=0):
+        super().__init__()
+        self.batch_size = batch_size
+        self.num_workers = num_workers
+        self.dataset = dataset
+
+        self.train_dataset = self.dataset
+        self.val_dataset = self.train_dataset.get_validation_dataset()
+
+    def setup(self, stage: str):
+        pass
+
+    def train_dataloader(self):
+        return DataLoader(self.train_dataset, batch_size=self.batch_size, num_workers=self.num_workers, pin_memory=True , persistent_workers=True if self.num_workers!=0 else False)
+
+    def val_dataloader(self):
+        return DataLoader(self.val_dataset, batch_size=self.batch_size, num_workers=self.num_workers, pin_memory=False , persistent_workers=False)
+
+    def predict_dataloader(self):
+        return DataLoader(self.dataset, batch_size=self.batch_size, num_workers=self.num_workers, pin_memory=False)
+    

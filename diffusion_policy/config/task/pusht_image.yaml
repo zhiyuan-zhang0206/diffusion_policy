@@ -14,7 +14,7 @@ shape_meta: &shape_meta
     shape: [2]
 
 env_runner:
-  _target_: diffusion_policy.env_runner.pusht_image_runner.PushTImageRunner
+  _target_: diffusion_policy.env_runner.pusht_image_runner.PushTImageRunnerAE
   n_train: 6
   n_train_vis: 2
   train_start_seed: 0

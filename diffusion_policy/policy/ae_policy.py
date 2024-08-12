@@ -39,6 +39,7 @@ class AEPolicy(BaseImagePolicy):
             use_cosine_lr: bool=True,
             # n_obs_steps,
             # crop_shape=(76, 76),
+            with_normalizer: bool=True,
             ):
         super().__init__()
 
@@ -61,6 +62,7 @@ class AEPolicy(BaseImagePolicy):
             weight_decay=weight_decay,
             warmup_steps=warmup_steps,
             use_cosine_lr=use_cosine_lr,
+            with_normalizer=with_normalizer,
         )
         
         self.normalizer = LinearNormalizer()
@@ -75,9 +77,9 @@ class AEPolicy(BaseImagePolicy):
         result: must include "action" key
         """
         self.pl_model.eval()
-        forward_output = self.pl_model.forward(obs_dict, normalize_input=True, unnormalize_output=True)
+        forward_output = self.pl_model.forward(obs_dict)
 
-        return {'action': forward_output['unnormalized_pred']} | forward_output
+        return {'action': forward_output['unnormalized_pred'] if forward_output['unnormalized_pred'] is not None else forward_output['pred']} | forward_output
 
     # ========= training  ============
     def set_normalizer(self, normalizer: LinearNormalizer):

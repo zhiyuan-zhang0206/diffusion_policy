@@ -163,6 +163,8 @@ class DownsampleCVAE(pl.LightningModule):
         weight_decay: float,
         warmup_steps: int,
         use_cosine_lr: bool=True,
+        
+        with_normalizer: bool=True,
     ):
         super().__init__()
 
@@ -178,7 +180,7 @@ class DownsampleCVAE(pl.LightningModule):
         self.weight_decay = weight_decay
         self.warmup_steps = warmup_steps
         self.use_cosine_lr = use_cosine_lr
-
+        self.with_normalizer = with_normalizer
         self.action_emb = nn.Linear(action_dim, hidden_size)
 
         self.cls = nn.Parameter(data=torch.zeros(size=(1, hidden_size)), requires_grad=True)
@@ -217,9 +219,13 @@ class DownsampleCVAE(pl.LightningModule):
             weight_decay=self.weight_decay
         )
         if self.use_cosine_lr:
+            if self.trainer.max_epochs is None or self.trainer.max_epochs == -1:
+                num_training_steps = self.trainer.max_steps
+            else:
+                num_training_steps = self.trainer.max_epochs * len(self.trainer.datamodule.train_dataloader())
             scheduler = get_cosine_schedule_with_warmup(optimizer, 
                                     num_warmup_steps=self.warmup_steps, 
-                                    num_training_steps=self.trainer.max_epochs * len(self.trainer.datamodule.train_dataloader()))
+                                    num_training_steps=num_training_steps)
             self.lr_scheduler = scheduler
         # print(f'max steps: {self.trainer.max_epochs * len(self.trainer.datamodule.train_dataloader())}, max epochs: {self.trainer.max_epochs}')
         if self.use_cosine_lr:
@@ -233,8 +239,13 @@ class DownsampleCVAE(pl.LightningModule):
         else:
             return optimizer
     
-    def encode(self, batch, normalize_input=True):
-        if normalize_input:
+    # def on_train_start(self) -> None:
+    #     ret = super().on_train_start()
+    #     self.to('cuda')
+    #     return ret
+
+    def encode(self, batch):
+        if self.with_normalizer:
             normalized_action = self.normalize_input(batch)
             action = normalized_action
         else:
@@ -243,7 +254,8 @@ class DownsampleCVAE(pl.LightningModule):
         # obs_emb = self.get_obs_emb(raw_image_features=batch['image'], raw_low_dim_data=batch.get('low_dim'))
 
         batch_size = action.shape[0]
-
+        # breakpoint()
+        # print(self.action_emb.weight.device, action.device, self.pe.device)
         pos_action_emb = self.action_emb(action) + self.pe[:, :self.horizon, :].expand((batch_size, self.horizon, self.hidden_size))
         cls = self.cls.expand((batch_size, 1, self.hidden_size))
 
@@ -256,7 +268,7 @@ class DownsampleCVAE(pl.LightningModule):
         posterior = DiagonalGaussianDistribution(z_encoder_output)
         return {'posterior': posterior, 'normalized_action': normalized_action}
     
-    def decode(self, posterior=None, z=None, sample_posterior=True, unnormalize_output=True):
+    def decode(self, posterior=None, z=None, sample_posterior=True):
         if not self.sample_posterior:
             sample_posterior = False
         if z is None:
@@ -277,7 +289,7 @@ class DownsampleCVAE(pl.LightningModule):
         return {
             'z': z,
             'pred': pred,
-            'unnormalized_pred': self.unnormalize_output(pred) if unnormalize_output else None
+            'unnormalized_pred': self.unnormalize_output(pred) if self.with_normalizer else None
         }
 
     def normalize_input(self, batch):
@@ -288,28 +300,33 @@ class DownsampleCVAE(pl.LightningModule):
             raise ValueError("Normalizer is not set")
 
     def unnormalize_output(self, pred):
+        if self.no_normalizer:
+            return pred
         if self.normalizer is not None:
             pred = self.normalizer['action'].unnormalize(pred)
             return pred
         else:
             raise ValueError("Normalizer is not set")
 
-    def forward(self, batch, sample_posterior=True, normalize_input=True, unnormalize_output=True):
+    def forward(self, batch, sample_posterior=True):
         """
         normalize_input: whether to normalize the input
         unnormalize_output: whether to unnormalize the output
         Loss is always computed in normalized space.
         """
-        encoding_output = self.encode(batch, normalize_input=normalize_input)
+        encoding_output = self.encode(batch)
         if not self.sample_posterior:
             sample_posterior = False
-        decoding_output = self.decode(posterior=encoding_output['posterior'], sample_posterior=sample_posterior, unnormalize_output=unnormalize_output)
+        decoding_output = self.decode(posterior=encoding_output['posterior'], sample_posterior=sample_posterior)
         
         loss_dict = self.loss.recon_kl_loss(
-            inputs=encoding_output['normalized_action'] if normalize_input else batch['action'], 
+            inputs=encoding_output['normalized_action'] if self.with_normalizer else batch['action'], 
             reconstructions=decoding_output['pred'], 
             posteriors=encoding_output['posterior'])
-        rec_loss_unnormalized = F.mse_loss(decoding_output['unnormalized_pred'].detach(), batch['action'].detach())
+        if self.with_normalizer:
+            rec_loss_unnormalized = F.mse_loss(decoding_output['unnormalized_pred'].detach(), batch['action'].detach())
+        else:
+            rec_loss_unnormalized = None
 
         # return loss_dict | decoding_output | encoding_output
         return {
@@ -325,15 +342,15 @@ class DownsampleCVAE(pl.LightningModule):
         }
     
     def training_step(self, batch, batch_idx):
-        forward_output = self.forward(batch=batch, sample_posterior=True, normalize_input=True)
-        loss_dict = {f'train_{k}': v for k, v in forward_output.items() if 'loss' in k}
+        forward_output = self.forward(batch=batch, sample_posterior=True)
+        loss_dict = {f'train_{k}': v for k, v in forward_output.items() if 'loss' in k and v is not None}
         self.log_dict(loss_dict, sync_dist=True, prog_bar=True)
         self.log('lr', self.optimizers().param_groups[0]['lr'], sync_dist=True)
         return loss_dict['train_total_loss']
 
     def validation_step(self, batch, batch_idx):
-        forward_output = self.forward(batch=batch, sample_posterior=False, normalize_input=True)
-        loss_dict = {f'val_{k}': v for k, v in forward_output.items() if 'loss' in k}
+        forward_output = self.forward(batch=batch, sample_posterior=False)
+        loss_dict = {f'val_{k}': v for k, v in forward_output.items() if 'loss' in k and v is not None}
         self.log_dict(loss_dict, sync_dist=True)
         return loss_dict['val_total_loss']
 
@@ -343,7 +360,7 @@ class DownsampleCVAE(pl.LightningModule):
 
     def predict_step(self, batch):
         self.eval()
-        return self.forward(batch=batch, sample_posterior=False, normalize_input=True, unnormalize_output=True)
+        return self.forward(batch=batch, sample_posterior=False)
 
 class ResBottleneck(nn.Module):
     def __init__(self, hidden_size, norm=True) -> None:

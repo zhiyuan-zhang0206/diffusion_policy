@@ -38,10 +38,41 @@ else
     cmd_prefix=""
 fi
 
-$cmd_prefix python train.py \
-    --config-dir=. \
-    --config-name=train_latent_diffusion_workspace.yaml \
-    "hydra.run.dir='${DATA_ROOT}/outputs/\${now:%Y.%m.%d}/\${now:%H.%M.%S}_\${name}_\${task_name}'" \
+# $cmd_prefix python train.py \
+#     --config-dir=. \
+#     --config-name=train_ae_workspace.yaml \
+#     "hydra.run.dir='data/outputs/\${now:%Y.%m.%d}/\${now:%H.%M.%S}_\${name}_\${task_name}'" \
+#     trainer.max_steps=100 \
+
+# batch size finder
+# $cmd_prefix python train.py --config-dir=. --config-name=train_latent_diffusion_workspace.yaml "hydra.run.dir='data/outputs/\${now:%Y.%m.%d}/\${now:%H.%M.%S}_\${name}_\${task_name}'" datamodule.batch_size=512   trainer.fast_dev_run=True task=lift_image_abs
+# $cmd_prefix python train.py --config-dir=. --config-name=train_latent_diffusion_workspace.yaml "hydra.run.dir='data/outputs/\${now:%Y.%m.%d}/\${now:%H.%M.%S}_\${name}_\${task_name}'" datamodule.batch_size=1024  trainer.fast_dev_run=True task=lift_image_abs
+# $cmd_prefix python train.py --config-dir=. --config-name=train_latent_diffusion_workspace.yaml "hydra.run.dir='data/outputs/\${now:%Y.%m.%d}/\${now:%H.%M.%S}_\${name}_\${task_name}'" datamodule.batch_size=2048  trainer.fast_dev_run=True task=lift_image_abs
+# $cmd_prefix python train.py --config-dir=. --config-name=train_latent_diffusion_workspace.yaml "hydra.run.dir='data/outputs/\${now:%Y.%m.%d}/\${now:%H.%M.%S}_\${name}_\${task_name}'" datamodule.batch_size=4096  trainer.fast_dev_run=True task=lift_image_abs trainer.callbacks=null
+# $cmd_prefix python train.py --config-dir=. --config-name=train_latent_diffusion_workspace.yaml "hydra.run.dir='data/outputs/\${now:%Y.%m.%d}/\${now:%H.%M.%S}_\${name}_\${task_name}'" datamodule.batch_size=8192  trainer.fast_dev_run=True task=lift_image_abs trainer.callbacks=null
+# $cmd_prefix python train.py --config-dir=. --config-name=train_latent_diffusion_workspace.yaml "hydra.run.dir='data/outputs/\${now:%Y.%m.%d}/\${now:%H.%M.%S}_\${name}_\${task_name}'" datamodule.batch_size=16384 trainer.fast_dev_run=True task=lift_image_abs trainer.callbacks=null
+# $cmd_prefix python train.py --config-dir=. --config-name=train_latent_diffusion_workspace.yaml "hydra.run.dir='data/outputs/\${now:%Y.%m.%d}/\${now:%H.%M.%S}_\${name}_\${task_name}'" datamodule.batch_size=32768 trainer.fast_dev_run=True task=lift_image_abs trainer.callbacks=null
+
+# lr finder
+# $cmd_prefix python train.py --config-dir=. --config-name=train_ae_workspace.yaml "hydra.run.dir='data/outputs/\${now:%Y.%m.%d}/\${now:%H.%M.%S}_\${name}_\${task_name}'" trainer.max_steps=200 policy.warmup_steps=100 trainer.val_check_interval=200 trainer.check_val_every_n_epoch=null policy.lr=1e-5
+# $cmd_prefix python train.py --config-dir=. --config-name=train_ae_workspace.yaml "hydra.run.dir='data/outputs/\${now:%Y.%m.%d}/\${now:%H.%M.%S}_\${name}_\${task_name}'" trainer.max_steps=200 policy.warmup_steps=100 trainer.val_check_interval=200 trainer.check_val_every_n_epoch=null policy.lr=2e-5
+# $cmd_prefix python train.py --config-dir=. --config-name=train_ae_workspace.yaml "hydra.run.dir='data/outputs/\${now:%Y.%m.%d}/\${now:%H.%M.%S}_\${name}_\${task_name}'" trainer.max_steps=200 policy.warmup_steps=100 trainer.val_check_interval=200 trainer.check_val_every_n_epoch=null policy.lr=4e-5
+# $cmd_prefix python train.py --config-dir=. --config-name=train_ae_workspace.yaml "hydra.run.dir='data/outputs/\${now:%Y.%m.%d}/\${now:%H.%M.%S}_\${name}_\${task_name}'" trainer.max_steps=200 policy.warmup_steps=100 trainer.val_check_interval=200 trainer.check_val_every_n_epoch=null policy.lr=8e-5
+# $cmd_prefix python train.py --config-dir=. --config-name=train_ae_workspace.yaml "hydra.run.dir='data/outputs/\${now:%Y.%m.%d}/\${now:%H.%M.%S}_\${name}_\${task_name}'" trainer.max_steps=200 policy.warmup_steps=100 trainer.val_check_interval=200 trainer.check_val_every_n_epoch=null policy.lr=1e-4
+# $cmd_prefix python train.py --config-dir=. --config-name=train_ae_workspace.yaml "hydra.run.dir='data/outputs/\${now:%Y.%m.%d}/\${now:%H.%M.%S}_\${name}_\${task_name}'" trainer.max_steps=200 policy.warmup_steps=100 trainer.val_check_interval=200 trainer.check_val_every_n_epoch=null policy.lr=2e-4
+# $cmd_prefix python train.py --config-dir=. --config-name=train_ae_workspace.yaml "hydra.run.dir='data/outputs/\${now:%Y.%m.%d}/\${now:%H.%M.%S}_\${name}_\${task_name}'" trainer.max_steps=200 policy.warmup_steps=100 trainer.val_check_interval=200 trainer.check_val_every_n_epoch=null policy.lr=4e-4
+# $cmd_prefix python train.py --config-dir=. --config-name=train_ae_workspace.yaml "hydra.run.dir='data/outputs/\${now:%Y.%m.%d}/\${now:%H.%M.%S}_\${name}_\${task_name}'" trainer.max_steps=200 policy.warmup_steps=100 trainer.val_check_interval=200 trainer.check_val_every_n_epoch=null policy.lr=8e-4
+
+# run
+# $cmd_prefix python train.py --config-dir=. --config-name=train_ae_workspace.yaml "hydra.run.dir='data/outputs/\${now:%Y.%m.%d}/\${now:%H.%M.%S}_\${name}_\${task_name}'" task=can_lowdim_abs
+# $cmd_prefix python train.py --config-dir=. --config-name=train_ae_workspace.yaml "hydra.run.dir='data/outputs/\${now:%Y.%m.%d}/\${now:%H.%M.%S}_\${name}_\${task_name}'" task=square_lowdim_abs
+# $cmd_prefix python train.py --config-dir=. --config-name=train_ae_workspace.yaml "hydra.run.dir='data/outputs/\${now:%Y.%m.%d}/\${now:%H.%M.%S}_\${name}_\${task_name}'" task=lift_lowdim_abs
+$cmd_prefix python train.py --config-dir=. --config-name=train_ae_workspace.yaml "hydra.run.dir='data/outputs/\${now:%Y.%m.%d}/\${now:%H.%M.%S}_\${name}_\${task_name}'" task=robomimic_mixed_lowdim datamodule._target_=diffusion_policy.dataset.robomimic_replay_lowdim_dataset.MixedRobomimicLowdimDatamodule trainer.max_steps=50000 trainer.val_check_interval=3000 datamodule.batch_size=256 policy.lr=1e-4
+
+# $cmd_prefix python train.py --config-dir=. --config-name=train_latent_diffusion_workspace.yaml "hydra.run.dir='data/outputs/\${now:%Y.%m.%d}/\${now:%H.%M.%S}_\${name}_\${task_name}'" task=can_image_abs
+
+# $cmd_prefix python train.py --config-dir=. --config-name=train_latent_diffusion_workspace.yaml "hydra.run.dir='data/outputs/\${now:%Y.%m.%d}/\${now:%H.%M.%S}_\${name}_\${task_name}'" task=robomimic_mixed_image datamodule._target_=diffusion_policy.dataset.robomimic_replay_image_dataset.MixedRobomimicImageDatamodule trainer.max_steps=40000 trainer.val_check_interval=2000 datamodule.batch_size=128
+
 
 if [ "$is_slurm" = "true" ]; then
     unset WANDB_MODE
@@ -49,4 +80,6 @@ fi
 
 unset HYDRA_FULL_ERROR
 unset DATA_ROOT
-unset ZZY_DEBUG
+unset ZZY_DEBU
+
+echo "training finished."

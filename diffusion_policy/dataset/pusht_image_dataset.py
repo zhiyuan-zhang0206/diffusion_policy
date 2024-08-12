@@ -9,7 +9,8 @@ from diffusion_policy.common.sampler import (
 from diffusion_policy.model.common.normalizer import LinearNormalizer
 from diffusion_policy.dataset.base_dataset import BaseImageDataset
 from diffusion_policy.common.normalize_util import get_image_range_normalizer
-
+import lightning as L
+from torch.utils.data import DataLoader, ConcatDataset
 class PushTImageDataset(BaseImageDataset):
     def __init__(self,
             zarr_path, 
@@ -89,7 +90,26 @@ class PushTImageDataset(BaseImageDataset):
         torch_data = dict_apply(data, torch.from_numpy)
         return torch_data
 
+class PushTImageDatamodule(L.LightningDataModule):
+    def __init__(self, dataset: PushTImageDataset,
+                 batch_size:int=128, num_workers:int=0):
+        super().__init__()
+        self.batch_size = batch_size
+        self.num_workers = num_workers
+        self.dataset = dataset
+        self.normalizer = self.dataset.get_normalizer()
+        self.train_dataset = self.dataset
+        self.val_dataset = self.dataset.get_validation_dataset()
 
+    def train_dataloader(self):
+        return DataLoader(self.train_dataset, batch_size=self.batch_size, num_workers=self.num_workers, pin_memory=True, persistent_workers=True if self.num_workers > 0 else False, shuffle=True)
+
+    def val_dataloader(self):
+        return DataLoader(self.val_dataset, batch_size=self.batch_size, num_workers=self.num_workers, pin_memory=True, persistent_workers=True if self.num_workers > 0 else False, shuffle=False)
+
+    def predict_dataloader(self):
+        return DataLoader(ConcatDataset([self.train_dataset, self.val_dataset]), batch_size=self.batch_size if self.batch_size > 1024 else 1024, num_workers=self.num_workers, shuffle=False)
+        
 def test():
     import os
     zarr_path = os.path.expanduser('~/dev/diffusion_policy/data/pusht/pusht_cchi_v7_replay.zarr')

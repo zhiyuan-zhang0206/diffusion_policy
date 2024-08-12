@@ -1,8 +1,8 @@
 defaults:
   - _self_
-  # - task: lift_image_abs
+  - task: lift_image_abs
   # - task: can_image_abs
-  - task: square_image_abs
+  # - task: square_image_abs
 
 name: train_latent_diffusion
 _target_: diffusion_policy.workspace.train_latent_diffusion_workspace.TrainLatentDiffusionWorkspace
@@ -12,9 +12,10 @@ shape_meta: ${task.shape_meta}
 exp_name: "default"
 
 resume_ckpt_path: # /home/zzy/robot/data/diffusion_policy_data/data/latent_diffusion_policy_ldm/2024-08-06_01-36-03/last.ckpt
-# ae_path: ${oc.env:DATA_ROOT}/latent_diffusion_policy_ae/2024-08-05_20-33-28/last.ckpt # lift
-# ae_path: ${oc.env:DATA_ROOT}/latent_diffusion_policy_ae/2024-08-06_22-22-50/last.ckpt # can
-ae_path: ${oc.env:DATA_ROOT}/latent_diffusion_policy_ae/2024-08-06_23-18-53/last.ckpt # square
+# ae_path: data/latent_diffusion_policy_ae/2024-08-05_20-33-28/last.ckpt # lift
+# ae_workspace_path: data/outputs/2024.08.11/20.12.11_train_ae_can_lowdim/last.ckpt
+ae_workspace_path: data/outputs/2024.08.12/01.42.55_train_ae_robomimic_mixed_lowdim/last.ckpt
+# ae_path: data/latent_diffusion_policy_ae/2024-08-06_23-18-53/last.ckpt # square
 
 seed: 3407
 
@@ -26,11 +27,11 @@ dataset_obs_steps: ${n_obs_steps}
 past_action_visible: False
 keypoint_visible_rate: 1.0
 obs_as_global_cond: True
-load_image_features: True
+load_image_features: False
 
 policy:
   _target_: diffusion_policy.policy.latent_diffusion_policy.LatentDiffusionPolicy
-  ae_path: ${ae_path}
+
   image_feature_dim: 512
   load_image_features: ${load_image_features}
   shape_meta: ${shape_meta}
@@ -39,7 +40,7 @@ policy:
   num_train_timesteps: 100
   beta_start: 0.0001
   beta_end: 0.02
-  num_inference_timesteps: 1000
+  num_inference_timesteps: 100
   beta_schedule: squaredcos_cap_v2
   variance_type: fixed_small # Yilun's paper uses fixed_small_log instead, but easy to cause Nan
   clip_sample: True # required when predict_epsilon=False
@@ -47,13 +48,14 @@ policy:
   # denoiser
   n_layers: 6
   n_heads: 8
-  hidden_size: 1024
+  hidden_size: 512
   horizon: ${horizon}
   dropout: 0.1
-  lr: 5e-4
+  lr: 2e-4
   use_lr_scheduler: True
   warmup_steps: 1000
-
+  task_name: ${task.name}
+  no_normalizer: True
   # n_action_steps: ${eval:'${n_action_steps}+${n_latency_steps}'}
   # n_obs_steps: ${n_obs_steps}
   # num_inference_steps: 100
@@ -82,8 +84,8 @@ policy:
 
 datamodule:
   _target_: diffusion_policy.dataset.robomimic_replay_image_dataset.RobomimicImageDatamodule
-  batch_size: 8192
-  num_workers: 4
+  batch_size: 2048
+  num_workers: 32
   dataset: ${task.dataset}
 
 # optimizer:
@@ -95,36 +97,40 @@ datamodule:
 
 trainer:
   _target_: lightning.pytorch.trainer.Trainer
-  max_epochs: 20000
+  max_epochs: -1
+  max_steps: 10000
   precision: bf16-mixed
-  check_val_every_n_epoch: 50
+  check_val_every_n_epoch: 
+  val_check_interval: 500
   log_every_n_steps: 1
+  strategy: ddp_find_unused_parameters_true
   logger:
     _target_: lightning.pytorch.loggers.wandb.WandbLogger 
     project: latent_diffusion_policy_ldm
-    name: # timestamp set at run time
-    save_dir: # timestamp set at run time
+    name: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
+    save_dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
   num_sanity_val_steps: 2
-  # strategy: ddp
-  default_root_dir: ${oc.env:DATA_ROOT}/latent_dp_logs/
   # overfit_batches: 1
-  # fast_dev_run: True
-  profiler: simple
+  fast_dev_run: False
+  # profiler: simple
   # profiler: 
   #   _target_: lightning.pytorch.profilers.AdvancedProfiler
   #   dirpath: .
   #   filename: perf_logs
   gradient_clip_val: 1
-  # accumulate_grad_batches: 2
   callbacks:
-    - _target_: lightning.pytorch.callbacks.ModelCheckpoint
+    - _target_: diffusion_policy.workspace.workspace_checkpoint_callback.WorkspaceCheckpointCallback
       save_top_k: 1
       save_last: True
       save_weights_only: False
       monitor: val/denoise_loss
       mode: min
-      dirpath:
+      dirpath: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
     - _target_: lightning.pytorch.callbacks.TQDMProgressBar
+    - _target_: diffusion_policy.workspace.env_runner_test_callback.EnvRunnerTestCallback
+    # - _target_: diffusion_policy.common.ema_callback.EMACallback
+      # decay: 0.9999
+
 training:
   use_ema: False
 #   device: "cuda:0"
@@ -169,14 +175,14 @@ checkpoint:
   save_last_snapshot: False
 
 multi_run:
-  run_dir: ${oc.env:DATA_ROOT}/data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+  run_dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
   wandb_name_base: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
 
 hydra:
   job:
     override_dirname: ${name}
   run:
-    dir: ${oc.env:DATA_ROOT}/data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
   sweep:
-    dir: ${oc.env:DATA_ROOT}/data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
     subdir: ${hydra.job.num}

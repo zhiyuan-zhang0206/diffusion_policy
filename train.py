@@ -13,7 +13,7 @@ import hydra
 from omegaconf import OmegaConf
 import pathlib
 from diffusion_policy.workspace.base_workspace import BaseWorkspace
-
+from loguru import logger
 # allows arbitrary python code execution in configs using the ${eval:''} resolver
 OmegaConf.register_new_resolver("eval", eval, replace=True)
 
@@ -26,13 +26,15 @@ def main(cfg: OmegaConf):
     # resolve immediately so all the ${now:} resolvers
     # will use the same time.
     OmegaConf.resolve(cfg)
-
+    # logger.info(f"config: {cfg}")
     if zzy_utils.check_environ_debug():
         cfg.task.env_runner.n_envs = 1
         cfg.task.env_runner.n_train = 1
         cfg.task.env_runner.n_test = 1
         cfg.task.env_runner.n_test_vis = 1
         # cfg['dataloader']['shuffle'] = False
+    if zzy_utils.check_environ_dry_run():
+        cfg.trainer.fast_dev_run = True
     cls = hydra.utils.get_class(cfg._target_)
     workspace: BaseWorkspace = cls(cfg)
     workspace.run()

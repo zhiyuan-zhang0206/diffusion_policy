@@ -453,48 +453,35 @@ class RobomimicReplayImageLanguageDataset(RobomimicReplayImageDataset):
             del data['obs']['agentview_image']
         return data
     
-# class MixedRobomimicReplayImageLanguageDataset(Dataset):
-#     def __init__(self, 
-#                 dataset_path:str,
-#                 include_tasks:List[str],
-#                 data_type:Literal['mh', 'ph'],
-#                 shape_meta: dict,
-#                 horizon=1,
-#                 pad_before=0,
-#                 pad_after=0,
-#                 n_obs_steps=None,
-#                 abs_action=False,
-#                 rotation_rep='rotation_6d', # ignored when abs_action=False
-#                 use_legacy_normalizer=False,
-#                 use_cache=False,
-#                 seed=42,
-#                 val_ratio=0.0):
-#         """
-#         dataset_path: path to the robomimic dataset. Should contain: task/ph/image_abs.hdf5
-#         """
-#         self.datasets = []
-#         for task in include_tasks:
-#             path = Path(dataset_path) / task / data_type / f'image{"_abs" if abs_action else ""}.hdf5'
-#             self.datasets.append(RobomimicReplayImageLanguageDataset(dataset_path=path.as_posix(), 
-#                                                                 shape_meta=shape_meta, 
-#                                                                 abs_action=abs_action, 
-#                                                                 rotation_rep=rotation_rep, 
-#                                                                 use_legacy_normalizer=use_legacy_normalizer, 
-#                                                                 use_cache=use_cache, 
-#                                                                 seed=seed, 
-#                                                                 val_ratio=val_ratio))
-#         self.dataset = ConcatDataset(self.datasets)
-#         self.train_dataset = self.dataset
-#         self.val_dataset = ConcatDataset([d.get_validation_dataset() for d in self.datasets])
+class MixedRobomimicReplayImageDataset:
+    def __init__(self, datasets: List[RobomimicReplayImageLanguageDataset]):
+        self.datasets = datasets
+        self.normalizers = [dataset.get_normalizer() for dataset in datasets]
+        data_index_to_dataset_index = []
+        for i, dataset in enumerate(datasets):
+            data_index_to_dataset_index.extend([i] * len(dataset))
+        self.data_index_to_dataset_index = np.array(data_index_to_dataset_index, dtype=np.int32)
+        
+        dataset_lengths = np.array([len(dataset) for dataset in datasets])
+        self.dataset_start_indices = [0] + np.cumsum(dataset_lengths).tolist()[:-1]
+        
+        self.length = sum([len(dataset) for dataset in datasets])
 
-#     def get_normalizer(self):
-#         normalizers = [d.get_normalizer() for d in self.datasets]
-#         max_values = np.max([n.get_input_stats_dict()['max'] for n in normalizers])
-#         min_values = np.min([n.get_input_stats_dict()['min'] for n in normalizers])
-#         return robomimic_abs_action_only_location_rotation_separate_normalizer_from_stat({'max':max_values, 'min':min_values})
+    def get_validation_dataset(self):
+        return MixedRobomimicReplayImageDataset([dataset.get_validation_dataset() for dataset in self.datasets])
 
-#     def get_validation_dataset(self):
-#         return self.val_dataset
+    def __len__(self):
+        return self.length
+    
+    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+        dataset_index = self.data_index_to_dataset_index[idx]
+        normalizer = self.normalizers[dataset_index]
+        data = self.datasets[int(dataset_index)][idx - self.dataset_start_indices[dataset_index]]
+        data['normalized_action'] = normalizer['action'].normalize(data['action']).detach()
+        return data
+    
+    def get_normalizer(self):
+        return LinearNormalizer()
 
 class RobomimicImageDatamodule(L.LightningDataModule):
     def __init__(self, dataset: Union[RobomimicReplayImageDataset, RobomimicReplayImageLanguageDataset],
@@ -527,8 +514,31 @@ class RobomimicImageDatamodule(L.LightningDataModule):
         return DataLoader(self.val_dataset, batch_size=self.batch_size, num_workers=self.num_workers, pin_memory=True, persistent_workers=True if self.num_workers > 0 else False, shuffle=False)
 
     def predict_dataloader(self):
-        return DataLoader(ConcatDataset([self.train_dataset, self.val_dataset]), batch_size=self.batch_size if self.batch_size > 1024 else 1024, num_workers=self.num_workers, shuffle=False)
+        return DataLoader(ConcatDataset([self.train_dataset, self.val_dataset]), batch_size=self.batch_size, num_workers=self.num_workers, shuffle=False)
         
+
+class MixedRobomimicImageDatamodule(L.LightningDataModule):
+    def __init__(self,dataset: MixedRobomimicReplayImageDataset, batch_size:int=128, num_workers:int=0):
+        super().__init__()
+        self.batch_size = batch_size
+        self.num_workers = num_workers
+        self.dataset = dataset
+
+        self.train_dataset = self.dataset
+        self.val_dataset = self.train_dataset.get_validation_dataset()
+
+    def setup(self, stage: str):
+        pass
+
+    def train_dataloader(self):
+        return DataLoader(self.train_dataset, batch_size=self.batch_size, num_workers=self.num_workers, pin_memory=True , persistent_workers=True if self.num_workers!=0 else False)
+
+    def val_dataloader(self):
+        return DataLoader(self.val_dataset, batch_size=self.batch_size, num_workers=self.num_workers, pin_memory=False , persistent_workers=False)
+
+    def predict_dataloader(self):
+        return DataLoader(self.dataset, batch_size=self.batch_size, num_workers=self.num_workers, pin_memory=False)
+    
 
 def main():
     dataset = MixedRobomimicReplayImageLanguageDataset(

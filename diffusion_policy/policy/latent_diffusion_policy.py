@@ -11,6 +11,7 @@ from diffusion_policy.model.common.normalizer import LinearNormalizer
 from diffusion_policy.policy.base_image_policy import BaseImagePolicy
 # from diffusion_policy.model.diffusion.conditional_unet1d import ConditionalUnet1D
 from diffusion_policy.model.diffusion.conditional_unet1d_rold import DownsampleObsLDM
+from diffusion_policy.model.diffusion.cvae_rold import DownsampleCVAE
 # from diffusion_policy.model.diffusion.mask_generator import LowdimMaskGenerator
 # from diffusion_policy.common.robomimic_config_util import get_robomimic_config
 # from robomimic.algo import algo_factory
@@ -26,8 +27,8 @@ import lightning as L
 class LatentDiffusionPolicy(BaseImagePolicy):
     def __init__(self, 
             shape_meta: dict,
-            ae_path:str,
-        
+
+            latent_size:int=256,
             hidden_size:int=256,
             horizon:int=16,
             language_feature_dim:int=768,
@@ -51,12 +52,15 @@ class LatentDiffusionPolicy(BaseImagePolicy):
             variance_type: str = "fixed_small", # 
             clip_sample: bool = True, # required when predict_epsilon=False
             prediction_type: str = "epsilon",
+            
+            task_name:str=None,
+            no_normalizer:bool=True,
             ):
         super().__init__()
 
         self.normalizer = LinearNormalizer()
         self.pl_model = DownsampleObsLDM(
-            ae_path=ae_path,
+            latent_size=latent_size,
             hidden_size=hidden_size,
             horizon=horizon,
             language_feature_dim=language_feature_dim,
@@ -79,9 +83,14 @@ class LatentDiffusionPolicy(BaseImagePolicy):
             variance_type=variance_type,
             clip_sample=clip_sample,
             prediction_type=prediction_type,
+            task_name=task_name,
+            no_normalizer=no_normalizer,
         )
         # self.pl_model  = DownsampleObsLDM.load_from_checkpoint("/home/zzy/robot/data/diffusion_policy_data/data/latent_diffusion_policy_ldm/2024-08-05_22-45-36/last.ckpt")
         self.shape_meta = shape_meta
+
+    def load_ae(self, ae: DownsampleCVAE):
+        self.pl_model.load_ae(ae)
 
     # ========= inference  ============
     def conditional_sample(self, 

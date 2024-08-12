@@ -3,6 +3,8 @@ defaults:
   # - task: lift_lowdim_abs
   # - task: can_lowdim_abs
   - task: square_lowdim_abs
+  # - task: pusht_image
+  # - task: robomimic_mixed_lowdim
 
 name: train_ae
 _target_: diffusion_policy.workspace.train_ae_workspace.TrainAEWorkspace
@@ -33,16 +35,16 @@ policy:
   _target_: diffusion_policy.policy.ae_policy.AEPolicy
   sample_posterior: False
   # action_dim: 7
-  hidden_size: 128
+  hidden_size: 512
   latent_size: 32
   n_encoder_layers: 3
   n_decoder_layers: 3
   n_heads: 8
   horizon: ${horizon}
   dropout: 0.1
-  lr: 7e-4
+  lr: 2e-4
   weight_decay: 0.0
-  warmup_steps: 0
+  warmup_steps: 1000
   use_cosine_lr: True
   # language_feature_dim: 
   # low_dim_feature_dim:
@@ -51,6 +53,7 @@ policy:
   # ckpt_path: 
   kl_weight: 0.00
   shape_meta: ${shape_meta}
+  with_normalizer: ${eval:'"mixed" not in "${task.name}"'}
 
 
 # ema:
@@ -62,27 +65,29 @@ policy:
 #   max_value: 0.9999
 datamodule:
   _target_: diffusion_policy.dataset.robomimic_replay_lowdim_dataset.RobomimicLowdimDatamodule
-  # _target_: diffusion_policy.dataset.robomimic_replay_image_dataset.RobomimicImageDatamodule
+  # _target_: diffusion_policy.dataset.pusht_image_dataset.PushTImageDatamodule
   batch_size: 8192
-  num_workers: 8
+  num_workers: 0
   dataset: ${task.dataset}
 
 trainer:
   _target_: lightning.pytorch.trainer.Trainer
   # devices: [0, 1, 2, 3]
-  max_epochs: 4000
+  max_epochs: -1
+  max_steps: 6000
+  precision: bf16-mixed
   # pretrain_max_epochs: 10
-  check_val_every_n_epoch: 100
+  check_val_every_n_epoch: 
   log_every_n_steps: 1
   logger:
     _target_: lightning.pytorch.loggers.wandb.WandbLogger 
     project: latent_diffusion_policy_ae
-    name: 
-    save_dir:
+    name: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
+    save_dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
   num_sanity_val_steps: 2
-  # strategy: ddp
-  default_root_dir: ${oc.env:DATA_ROOT}/latent_dp_logs/
-  # fast_dev_run: True
+  strategy: ddp_find_unused_parameters_true
+  fast_dev_run: False
+  val_check_interval: 500
   # overfit_batches: 500
   # fast_dev_run: True
   # profiler: simple
@@ -90,16 +95,21 @@ trainer:
   #   _target_: lightning.pytorch.profilers.AdvancedProfiler
   #   dirpath: .
   #   filename: perf_logs
-  gradient_clip_val: 0.1
+  gradient_clip_val: 1
   callbacks:
-    - _target_: lightning.pytorch.callbacks.ModelCheckpoint
+    - _target_: diffusion_policy.workspace.workspace_checkpoint_callback.WorkspaceCheckpointCallback
       save_top_k: 1
       save_last: True
       save_weights_only: False
       monitor: val_total_loss
       mode: min
-      dirpath:
-    - _target_: lightning.pytorch.callbacks.TQDMProgressBar
+      dirpath: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+    - _target_: diffusion_policy.workspace.env_runner_test_callback.EnvRunnerTestCallback
+    # - _target_: lightning.pytorch.callbacks.BatchSizeFinder
+    # - _target_: lightning.pytorch.callbacks.LearningRateFinder
+      # min_lr: 1e-5
+      # max_lr: 1e-2
+      # num_training_steps: 100
       # refresh_rate: 100
 
 # logging:
@@ -121,14 +131,14 @@ trainer:
 #   save_last_snapshot: False
 
 multi_run:
-  run_dir: ${oc.env:DATA_ROOT}/data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+  run_dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
   wandb_name_base: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
 
 hydra:
   job:
     override_dirname: ${name}
   run:
-    dir: ${oc.env:DATA_ROOT}/data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
   sweep:
-    dir: ${oc.env:DATA_ROOT}/data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
     subdir: ${hydra.job.num}

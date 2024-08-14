@@ -79,7 +79,7 @@ class AEPolicy(BaseImagePolicy):
         self.pl_model.eval()
         forward_output = self.pl_model.forward(obs_dict)
 
-        return {'action': forward_output['unnormalized_pred'] if forward_output['unnormalized_pred'] is not None else forward_output['pred']} | forward_output
+        return forward_output
 
     # ========= training  ============
     def set_normalizer(self, normalizer: LinearNormalizer):

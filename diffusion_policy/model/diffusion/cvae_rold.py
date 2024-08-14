@@ -247,16 +247,14 @@ class DownsampleCVAE(pl.LightningModule):
     def encode(self, batch):
         if self.with_normalizer:
             normalized_action = self.normalize_input(batch)
-            action = normalized_action
         else:
-            normalized_action = None
-            action = batch['action']
+            normalized_action = batch['normalized_action']
         # obs_emb = self.get_obs_emb(raw_image_features=batch['image'], raw_low_dim_data=batch.get('low_dim'))
 
-        batch_size = action.shape[0]
+        batch_size = normalized_action.shape[0]
         # breakpoint()
         # print(self.action_emb.weight.device, action.device, self.pe.device)
-        pos_action_emb = self.action_emb(action) + self.pe[:, :self.horizon, :].expand((batch_size, self.horizon, self.hidden_size))
+        pos_action_emb = self.action_emb(normalized_action) + self.pe[:, :self.horizon, :].expand((batch_size, self.horizon, self.hidden_size))
         cls = self.cls.expand((batch_size, 1, self.hidden_size))
 
         z_encoder_input = torch.cat([cls, pos_action_emb], dim=1)
@@ -300,13 +298,8 @@ class DownsampleCVAE(pl.LightningModule):
             raise ValueError("Normalizer is not set")
 
     def unnormalize_output(self, pred):
-        if self.no_normalizer:
-            return pred
-        if self.normalizer is not None:
-            pred = self.normalizer['action'].unnormalize(pred)
-            return pred
-        else:
-            raise ValueError("Normalizer is not set")
+        pred = self.normalizer['action'].unnormalize(pred)
+        return pred
 
     def forward(self, batch, sample_posterior=True):
         """
@@ -320,7 +313,7 @@ class DownsampleCVAE(pl.LightningModule):
         decoding_output = self.decode(posterior=encoding_output['posterior'], sample_posterior=sample_posterior)
         
         loss_dict = self.loss.recon_kl_loss(
-            inputs=encoding_output['normalized_action'] if self.with_normalizer else batch['action'], 
+            inputs=encoding_output['normalized_action'], 
             reconstructions=decoding_output['pred'], 
             posteriors=encoding_output['posterior'])
         if self.with_normalizer:

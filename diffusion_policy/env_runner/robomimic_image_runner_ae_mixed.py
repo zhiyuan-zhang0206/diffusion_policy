@@ -96,6 +96,10 @@ class RobomimicImageRunnerAEMixed:
         ):
         self.runners = runners
 
+    def set_normalizer(self, workspace):
+        for runner, dataset in zip(self.runners, workspace.datamodule.dataset.datasets):
+            runner.normalizer = dataset.get_normalizer()
+
     def load_replay_buffer(self, workspace):
         for runner, dataset in zip(self.runners, workspace.datamodule.dataset.datasets):
             runner.replay_buffer = dataset.replay_buffer

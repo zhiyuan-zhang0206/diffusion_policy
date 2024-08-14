@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH -J rold_train                  # 作业名为 test
 #SBATCH -o logs/latent_dp_train_%j.out   # 屏幕上的输出文件重定向到 test.out
-#SBATCH -p SC-A800                   # 
+#SBATCH -p SC-L40S                  # 
 #SBATCH --qos=plus               # 
 #SBATCH -N 1                      # 作业申请 1 个节点
 #SBATCH --ntasks-per-node=1       # 单节点启动的进程数为 4

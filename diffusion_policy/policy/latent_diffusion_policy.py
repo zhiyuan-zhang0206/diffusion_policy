@@ -54,7 +54,7 @@ class LatentDiffusionPolicy(BaseImagePolicy):
             prediction_type: str = "epsilon",
             
             task_name:str=None,
-            no_normalizer:bool=True,
+            with_normalizer:bool=True,
             ):
         super().__init__()
 
@@ -84,7 +84,7 @@ class LatentDiffusionPolicy(BaseImagePolicy):
             clip_sample=clip_sample,
             prediction_type=prediction_type,
             task_name=task_name,
-            no_normalizer=no_normalizer,
+            with_normalizer=with_normalizer,
         )
         # self.pl_model  = DownsampleObsLDM.load_from_checkpoint("/home/zzy/robot/data/diffusion_policy_data/data/latent_diffusion_policy_ldm/2024-08-05_22-45-36/last.ckpt")
         self.shape_meta = shape_meta
@@ -142,8 +142,8 @@ class LatentDiffusionPolicy(BaseImagePolicy):
         # zzy_utils.pretty_print(obs_dict)
         # print()
         input_dict = self.prepare_input(obs_dict)
-        pred_dict = self.pl_model.predict_action(input_dict, unnormalize_output=True)
-        pred_dict['action'] = pred_dict['unnormalized_pred_action'].detach()
+        pred_dict = self.pl_model.predict_action(input_dict)
+        pred_dict['pred'] = pred_dict['pred_action']
         return pred_dict
     
     def prepare_input(self, obs_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:

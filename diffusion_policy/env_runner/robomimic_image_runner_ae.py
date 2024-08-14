@@ -291,6 +291,7 @@ class RobomimicImageRunnerAE(BaseImageRunner):
 
         # dataloader = self.datamodule.predict_dataloader()
         policy.pl_model.eval()
+        self.normalizer.to(device)
         # model = DownsampleCVAE.load_from_checkpoint('/home/zzy/robot/robot_zzy/diffusion_policy/lightning_logs/r8ik38j3/checkpoints/last.ckpt')
         # for batch in dataloader:
         #     batch = {k: v.to(device) for k, v in batch.items()}
@@ -367,14 +368,15 @@ class RobomimicImageRunnerAE(BaseImageRunner):
                 obs_dict = dict_apply(np_obs_dict, 
                     lambda x: torch.from_numpy(x).to(
                         device=device))
+                obs_dict['normalized_action'] = self.normalizer['action'].normalize(obs_dict['action'])
 
                 with torch.no_grad():
                     action_dict = policy.predict_action(obs_dict)
-
-                np_action_dict = dict_apply(action_dict,
-                    lambda x: x.detach().to('cpu').numpy(), True)
+                action = self.normalizer['action'].unnormalize(action_dict['pred'])[:, :self.n_action_steps, :].detach().cpu().numpy()
+                # np_action_dict = dict_apply(action_dict,
+                #     lambda x: x.detach().to('cpu').numpy(), True)
                 
-                action = np_action_dict['action'][:, :self.n_action_steps, :]
+                # action = np_action_dict['action'][:, :self.n_action_steps, :]
 
                 if not np.all(np.isfinite(action)):
                     print(action)

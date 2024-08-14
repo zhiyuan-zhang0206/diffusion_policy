@@ -43,7 +43,7 @@ class TrainAEWorkspace(BaseWorkspace):
         cfg.task.env_runner['n_test_vis'] = 0
         cfg.task.env_runner['n_train_vis'] = 0
         cfg.task.env_runner['n_train'] = 50 if not zzy_utils.check_environ_dry_run() else 1
-        cfg.task.env_runner['n_test'] = 0
+        cfg.task.env_runner['n_test'] = 50
         cfg.task.env_runner['n_envs'] = 10 if not zzy_utils.check_environ_dry_run() else 1
         if 'lift' in cfg.task_name:
             cfg.task.env_runner['max_steps'] = 128
@@ -62,6 +62,7 @@ class TrainAEWorkspace(BaseWorkspace):
         cfg.task.env_runner['output_dir'] = self.output_dir 
         self.env_runner = hydra.utils.instantiate(cfg.task.env_runner)
         self.env_runner.load_replay_buffer(self)
+        self.env_runner.set_normalizer(self)
         return
 
     def close_env_runner(self):

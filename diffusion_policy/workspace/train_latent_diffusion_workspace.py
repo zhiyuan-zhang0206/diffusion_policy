@@ -65,14 +65,20 @@ class TrainLatentDiffusionWorkspace(BaseWorkspace):
         self.model.pl_model.workspace_run_env_runner = self.run_env_runner
         self.datamodule : Union[L.LightningDataModule, RobomimicImageDatamodule] = hydra.utils.instantiate(cfg.datamodule)
         self.load_env_runner()
+        if cfg.resume_ckpt_path is not None:
+            with open(cfg.resume_ckpt_path, 'rb') as f:
+                payload = torch.load(f, pickle_module=dill)
+            self.load_payload(payload)
+            self.close_env_runner()
+            self.load_env_runner()
 
     def load_env_runner(self):
         cfg = deepcopy(self.cfg)
         cfg.task.env_runner['n_test_vis'] = 0
         cfg.task.env_runner['n_train_vis'] = 0
         cfg.task.env_runner['n_train'] = 50 if not zzy_utils.check_environ_dry_run() else 1
-        cfg.task.env_runner['n_test'] = 0
-        cfg.task.env_runner['n_envs'] = 2 if not zzy_utils.check_environ_dry_run() else 1
+        cfg.task.env_runner['n_test'] = 50
+        cfg.task.env_runner['n_envs'] = 10 if not zzy_utils.check_environ_dry_run() else 1
         if 'lift' in cfg.task_name:
             cfg.task.env_runner['max_steps'] = 128
         else:
@@ -90,6 +96,7 @@ class TrainLatentDiffusionWorkspace(BaseWorkspace):
         cfg.task.env_runner['output_dir'] = self.output_dir 
         self.env_runner = hydra.utils.instantiate(cfg.task.env_runner)
         self.env_runner.load_replay_buffer(self)
+        self.env_runner.set_normalizer(self)
         return
 
 
@@ -101,14 +108,18 @@ class TrainLatentDiffusionWorkspace(BaseWorkspace):
         run_result = self.env_runner.run(self.model)
         if isinstance(run_result, list):
             result = {f'train/mean_score_{r["task_name"]}': r['train/mean_score'] for r in run_result}
+            if 'test/mean_score' in run_result[0]:
+                result.update({f'test/mean_score_{r["task_name"]}': r['test/mean_score'] for r in run_result})
         else:
             result = {'train/mean_score': run_result['train/mean_score']}
+            if 'test/mean_score' in run_result:
+                result.update({'test/mean_score': run_result['test/mean_score']})
         return result
 
 
     def run(self):
         self.model.set_normalizer(self.datamodule.dataset.get_normalizer(), datamodule = self.datamodule)
-        self.trainer.fit(self.model.pl_model, datamodule=self.datamodule, ckpt_path=self.cfg.resume_ckpt_path)
+        self.trainer.fit(self.model.pl_model, datamodule=self.datamodule)
         self.close_env_runner()
 
 @hydra.main(

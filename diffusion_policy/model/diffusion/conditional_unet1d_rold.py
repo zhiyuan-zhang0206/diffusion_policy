@@ -49,7 +49,7 @@ class DownsampleObsLDM(L.LightningModule):
         prediction_type: str = "epsilon",
         
         task_name:str=None,
-        no_normalizer:bool=True,
+        with_normalizer:bool=True,
     ) -> None:
         super().__init__()
 
@@ -78,7 +78,6 @@ class DownsampleObsLDM(L.LightningModule):
         self.use_lr_scheduler = use_lr_scheduler
 
         self.task_name = task_name
-        self.no_normalizer = no_normalizer
         self.save_hyperparameters()
         self.normalizer = SingleFieldLinearNormalizer()
         
@@ -228,7 +227,7 @@ class DownsampleObsLDM(L.LightningModule):
             features = self.image_encoder(batch['obs']['image'])
         return self.image_emb(features)
 
-    def predict_action(self, batch, unnormalize_output=True):
+    def predict_action(self, batch):
         scheduler = self.noise_scheduler
         batch_size = len(batch['obs']['language_embedding'])
         language_emb = self.get_language_emb(batch=batch)
@@ -241,17 +240,17 @@ class DownsampleObsLDM(L.LightningModule):
             z = scheduler.step(model_output, t, z).prev_sample
         unnormalized_z = self.normalizer.unnormalize(z)
 
-        decoding_output = self.autoencoder.decode(z=unnormalized_z, unnormalize_output=unnormalize_output)
+        decoding_output = self.autoencoder.decode(z=unnormalized_z)
         return {
                     'pred_z': z,
                     'unnormalized_z': unnormalized_z,
                     'pred_action': decoding_output['pred'],
-                    'unnormalized_pred_action': decoding_output['unnormalized_pred'] if unnormalize_output else None
+                    'unnormalized_pred_action': decoding_output['unnormalized_pred']
                 }
 
-    def forward(self, batch, normalize_input=True):
+    def forward(self, batch):
         # autoencoder
-        encoding_output = self.autoencoder.encode(batch, normalize_input=normalize_input)
+        encoding_output = self.autoencoder.encode(batch)
         image_emb = self.get_image_emb(batch=batch)
         if self.autoencoder.sample_posterior:
             z = encoding_output['posterior'].sample()
@@ -282,21 +281,21 @@ class DownsampleObsLDM(L.LightningModule):
                 'normalized_action': encoding_output['normalized_action'],}
 
     def training_step(self, batch, batch_idx):
-        forward_output = self.forward(batch=batch, normalize_input=True)
+        forward_output = self.forward(batch=batch)
         self.log('train/denoise_loss', forward_output['denoise_loss'], sync_dist=True, prog_bar=True)
         self.log('trainer/lr', self.optimizers().param_groups[0]['lr'], sync_dist=True)
         return forward_output['denoise_loss']
 
     def validation_step(self, batch, batch_idx):
-        forward_output = self.forward(batch=batch, normalize_input=True)
+        forward_output = self.forward(batch=batch)
         self.log('val/denoise_loss', forward_output['denoise_loss'], sync_dist=True, batch_size=batch['action'].shape[0]) # one step normalized z loss
         
-        pred_output = self.predict_action(batch=batch, unnormalize_output=True)
+        pred_output = self.predict_action(batch=batch)
         self.log('val/normalized_z_mse',        F.mse_loss(forward_output['normalized_z'], pred_output['pred_z']),              sync_dist=True, batch_size=batch['action'].shape[0]) # multi step normalized z loss
         self.log('val/unnormalized_z_mse',      F.mse_loss(forward_output['z'], pred_output['unnormalized_z']),                 sync_dist=True, batch_size=batch['action'].shape[0]) # unnormalized z loss
-        self.log('val/normalized_action_mse',   F.mse_loss(forward_output['normalized_action'], pred_output['pred_action']),    sync_dist=True, batch_size=batch['action'].shape[0]) # normalized action loss
-        self.log('val/unnormalized_action_mse', F.mse_loss(batch['action'], pred_output['unnormalized_pred_action']),                sync_dist=True, batch_size=batch['action'].shape[0]) # unnormalized action loss
-        ae_forward_output = self.autoencoder.forward(batch=batch, normalize_input=True)
+        # self.log('val/normalized_action_mse',   F.mse_loss(forward_output['normalized_action'], pred_output['pred_action']),    sync_dist=True, batch_size=batch['action'].shape[0]) # normalized action loss
+        # self.log('val/unnormalized_action_mse', F.mse_loss(batch['action'], pred_output['unnormalized_pred_action']),                sync_dist=True, batch_size=batch['action'].shape[0]) # unnormalized action loss
+        ae_forward_output = self.autoencoder.forward(batch=batch)
         self.log('val/ae_rec_loss', ae_forward_output['rec_loss'], sync_dist=True, batch_size=batch['action'].shape[0]) # autoencoder reconstruction loss
         return forward_output
 
@@ -304,7 +303,7 @@ class DownsampleObsLDM(L.LightningModule):
         if zzy_utils.check_environ_dry_run():
             self.autoencoder.eval()
             for batch in datamodule.train_dataloader():
-                output = self.autoencoder.forward(batch=batch, normalize_input=True)
+                output = self.autoencoder.forward(batch=batch)
                 stat = {'max': output['z'].max(dim=0)[0], 'min': output['z'].min(dim=0)[0]}
                 self.normalizer = get_range_normalizer_from_stat(stat=stat)
                 return
